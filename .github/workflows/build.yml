@@ -1,0 +1,51 @@
+name: Build Pico Clock
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Allows manual triggering
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+      
+    - name: Build Docker container
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: false
+        load: true
+        tags: pico-clock-builder:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+      
+    - name: Build project
+      run: |
+        # Create a build directory to store artifacts
+        mkdir -p build
+        
+        # Run the build script inside the Docker container
+        # Mount the repository to /app and the build directory to /app/build
+        docker run --rm \
+          -v ${{ github.workspace }}:/app \
+          -v ${{ github.workspace }}/build:/app/build \
+          pico-clock-builder:latest \
+          /bin/bash -c "/app/scripts/build.sh"
+      
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: pico-clock-firmware
+        path: |
+          build/pico-clock.uf2
+          build/pico-clock.bin
+          build/pico-clock.elf
