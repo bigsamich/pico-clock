@@ -10,30 +10,23 @@
 #include "hardware/pio.h"
 #include "hardware/gpio.h"
 #include "tclk.h"
-#include "mdat.h"
 
 // Configuration
 #define TCLK_INPUT_PIN 16    // GPIO pin for TCLK input
 #define TCLK_OUTPUT_PIN 17   // GPIO pin for TCLK output
-#define MDAT_INPUT_PIN 25    // GPIO pin for MDAT input
-#define MDAT_OUTPUT_PIN 24   // GPIO pin for MDAT output
 #define BUFFER_SIZE 256      // Size of the buffer for data bytes
 #define JSON_BUFFER_SIZE 128 // Size of the JSON buffer
 
 // Function prototypes
 void core1_entry();
 void process_received_tclk_data(uint8_t* buffer, size_t byte_count, uint64_t timestamp);
-void process_received_mdat_data(uint8_t* buffer, size_t byte_count, uint64_t timestamp);
 void output_tclk_event(uint8_t event_byte, uint64_t timestamp);
-void output_mdat_event(uint8_t event_byte, uint64_t timestamp);
 void process_serial_command();
-void send_timeline(const uint8_t* events, const uint64_t* offsets, size_t count, bool use_mdat);
+void send_timeline(const uint8_t* events, const uint64_t* offsets, size_t count);
 
 // Global variables
 static tclk_t tclk;
-static mdat_t mdat;
 static volatile bool running = true;
-static volatile bool use_mdat_mode = false;  // Flag to switch between TCLK and MDAT modes
 
 int main() {
     // Initialize stdio
@@ -50,16 +43,6 @@ int main() {
     
     printf("TCLK interface initialized (IN: pin %d, OUT: pin %d)\n", 
            TCLK_INPUT_PIN, TCLK_OUTPUT_PIN);
-    
-    // Initialize the MDAT interface
-    if (!mdat_init(&mdat, pio1, MDAT_INPUT_PIN, MDAT_OUTPUT_PIN)) {
-        printf("Failed to initialize MDAT interface\n");
-        tclk_deinit(&tclk);
-        return 1;
-    }
-    
-    printf("MDAT interface initialized (IN: pin %d, OUT: pin %d)\n", 
-           MDAT_INPUT_PIN, MDAT_OUTPUT_PIN);
     
     // Start the second core for data processing
     multicore_launch_core1(core1_entry);
@@ -103,21 +86,6 @@ void core1_entry() {
     
     uint8_t rx_buffer[BUFFER_SIZE]; // Buffer for received bytes
     
-    // Start the MDAT interface
-    if (!mdat_start(&mdat)) {
-        printf("Failed to start MDAT interface\n");
-        return;
-    }
-    
-    printf("MDAT interface started\n");
-    
-    // Synchronize the MDAT interface
-    printf("Starting MDAT synchronization. This will wait until a valid signal is detected...\n");
-    if (!mdat_synchronize(&mdat)) {
-        printf("Error: Failed to synchronize MDAT interface (invalid mdat structure)\n");
-        return;
-    }
-    
     while (running) {
         // Read received bytes with timestamp from TCLK
         uint64_t tclk_timestamp = 0;
@@ -128,24 +96,11 @@ void core1_entry() {
             process_received_tclk_data(rx_buffer, tclk_byte_count, tclk_timestamp);
         }
         
-        // Read received bytes with timestamp from MDAT
-        uint64_t mdat_timestamp = 0;
-        size_t mdat_byte_count = mdat_receive_bytes(&mdat, rx_buffer, BUFFER_SIZE, &mdat_timestamp);
-        
-        if (mdat_byte_count > 0) {
-            // Process the received MDAT data with timestamp
-            process_received_mdat_data(rx_buffer, mdat_byte_count, mdat_timestamp);
-        }
-        
-        // If no data available from either interface, sleep a bit
-        if (tclk_byte_count == 0 && mdat_byte_count == 0) {
+        // If no data available, sleep a bit
+        if (tclk_byte_count == 0) {
             sleep_ms(10);
         }
     }
-    
-    // Clean up MDAT interface
-    mdat_stop(&mdat);
-    mdat_deinit(&mdat);
     
     printf("Data processing stopped on core 1\n");
 }
@@ -158,14 +113,6 @@ void process_received_tclk_data(uint8_t* buffer, size_t byte_count, uint64_t tim
     }
 }
 
-// Process the received MDAT data and output as JSON
-void process_received_mdat_data(uint8_t* buffer, size_t byte_count, uint64_t timestamp) {
-    // Process each byte as a separate MDAT event
-    for (size_t i = 0; i < byte_count; i++) {
-        output_mdat_event(buffer[i], timestamp);
-    }
-}
-
 // Output a TCLK event to the serial port in JSON format
 void output_tclk_event(uint8_t event_byte, uint64_t timestamp) {
     char json_buffer[JSON_BUFFER_SIZE];
@@ -174,21 +121,6 @@ void output_tclk_event(uint8_t event_byte, uint64_t timestamp) {
     // Convert timestamp from microseconds to nanoseconds (multiply by 1000)
     snprintf(json_buffer, JSON_BUFFER_SIZE,
              "{\"tclk_event\":%d, \"time\":%llu}\n",
-             event_byte,
-             timestamp * 1000); // Convert to nanoseconds
-    
-    // Output the JSON event
-    printf("%s", json_buffer);
-}
-
-// Output an MDAT event to the serial port in JSON format
-void output_mdat_event(uint8_t event_byte, uint64_t timestamp) {
-    char json_buffer[JSON_BUFFER_SIZE];
-    
-    // Format the JSON event
-    // Convert timestamp from microseconds to nanoseconds (multiply by 1000)
-    snprintf(json_buffer, JSON_BUFFER_SIZE,
-             "{\"mdat_event\":%d, \"time\":%llu}\n",
              event_byte,
              timestamp * 1000); // Convert to nanoseconds
     
@@ -217,31 +149,12 @@ void process_serial_command() {
         if (strcmp(command, "help") == 0) {
             printf("Available commands:\n");
             printf("  help                   - Show this help message\n");
-            printf("  mode [tclk|mdat]       - Switch between TCLK and MDAT modes\n");
             printf("  event HEX              - Send a single byte event (0x00-0xFF)\n");
             printf("  timeline EVENT,OFFSET... - Send a timeline of events with time offsets\n");
             printf("                           Example: timeline 1F,1000000,2A,500000\n");
             printf("                           Sends event 0x1F, waits 1ms, sends 0x2A, waits 0.5ms\n");
-            printf("  testloop [tclk|mdat]   - Run a test loop with jumpered pins\n");
+            printf("  testloop               - Run a test loop with jumpered pins\n");
             printf("  exit                   - Exit the application\n");
-            
-            // Show current mode
-            printf("Current mode: %s\n", use_mdat_mode ? "MDAT" : "TCLK");
-        }
-        else if (strncmp(command, "mode ", 5) == 0) {
-            const char* mode_str = command + 5;
-            
-            if (strcmp(mode_str, "tclk") == 0) {
-                use_mdat_mode = false;
-                printf("Switched to TCLK mode\n");
-            }
-            else if (strcmp(mode_str, "mdat") == 0) {
-                use_mdat_mode = true;
-                printf("Switched to MDAT mode\n");
-            }
-            else {
-                printf("Error: Invalid mode. Use 'mode tclk' or 'mode mdat'\n");
-            }
         }
         else if (strncmp(command, "event ", 6) == 0) {
             const char* hex_str = command + 6;
@@ -254,16 +167,11 @@ void process_serial_command() {
                 printf("Error: Invalid hex value. Please use format 'event XX' where XX is a hex value (00-FF)\n");
             } else {
                 uint8_t byte_value = (uint8_t)value;
-                printf("Sending single byte event: 0x%02X via %s\n", byte_value, use_mdat_mode ? "MDAT" : "TCLK");
+                printf("Sending single byte event: 0x%02X via TCLK\n", byte_value);
                 
-                // Send the byte using the current mode
-                if (use_mdat_mode) {
-                    mdat_send_byte(&mdat, byte_value);
-                    output_mdat_event(byte_value, time_us_64());
-                } else {
-                    tclk_send_byte(&tclk, byte_value);
-                    output_tclk_event(byte_value, time_us_64());
-                }
+                // Send the byte using TCLK
+                tclk_send_byte(&tclk, byte_value);
+                output_tclk_event(byte_value, time_us_64());
             }
         }
         else if (strncmp(command, "timeline ", 9) == 0) {
@@ -310,36 +218,18 @@ void process_serial_command() {
             }
             
             if (count > 0) {
-                printf("Sending timeline with %zu events via %s\n", count, use_mdat_mode ? "MDAT" : "TCLK");
-                send_timeline(events, offsets, count, use_mdat_mode);
+                printf("Sending timeline with %zu events via TCLK\n", count);
+                send_timeline(events, offsets, count);
             } else {
                 printf("Error: No valid events in timeline\n");
             }
         }
-        else if (strncmp(command, "testloop", 8) == 0) {
-            // Check if a specific protocol is specified
-            bool use_mdat_for_test = use_mdat_mode; // Default to current mode
-            
-            if (strcmp(command, "testloop tclk") == 0) {
-                use_mdat_for_test = false;
-            } else if (strcmp(command, "testloop mdat") == 0) {
-                use_mdat_for_test = true;
-            }
-            
-            if (use_mdat_for_test) {
-                printf("Running MDAT test loop with jumpered pins...\n");
-                if (mdat_run_test_loop(&mdat)) {
-                    printf("MDAT test loop completed successfully\n");
-                } else {
-                    printf("MDAT test loop failed\n");
-                }
+        else if (strcmp(command, "testloop") == 0) {
+            printf("Running TCLK test loop with jumpered pins...\n");
+            if (tclk_run_test_loop(&tclk)) {
+                printf("TCLK test loop completed successfully\n");
             } else {
-                printf("Running TCLK test loop with jumpered pins...\n");
-                if (tclk_run_test_loop(&tclk)) {
-                    printf("TCLK test loop completed successfully\n");
-                } else {
-                    printf("TCLK test loop failed\n");
-                }
+                printf("TCLK test loop failed\n");
             }
         }
         else if (strcmp(command, "exit") == 0) {
@@ -354,17 +244,12 @@ void process_serial_command() {
 }
 
 // Send a timeline of events with specified time offsets
-void send_timeline(const uint8_t* events, const uint64_t* offsets, size_t count, bool use_mdat) {
+void send_timeline(const uint8_t* events, const uint64_t* offsets, size_t count) {
     if (!events || !offsets || count == 0) return;
     
     // Send the first event immediately
-    if (use_mdat) {
-        mdat_send_byte(&mdat, events[0]);
-        output_mdat_event(events[0], time_us_64());
-    } else {
-        tclk_send_byte(&tclk, events[0]);
-        output_tclk_event(events[0], time_us_64());
-    }
+    tclk_send_byte(&tclk, events[0]);
+    output_tclk_event(events[0], time_us_64());
     
     // Send the remaining events with the specified time offsets
     for (size_t i = 1; i < count; i++) {
@@ -383,14 +268,9 @@ void send_timeline(const uint8_t* events, const uint64_t* offsets, size_t count,
         }
         
         // Send the next event
-        if (use_mdat) {
-            mdat_send_byte(&mdat, events[i]);
-            output_mdat_event(events[i], time_us_64());
-        } else {
-            tclk_send_byte(&tclk, events[i]);
-            output_tclk_event(events[i], time_us_64());
-        }
+        tclk_send_byte(&tclk, events[i]);
+        output_tclk_event(events[i], time_us_64());
     }
     
-    printf("Timeline completed: %zu events sent via %s\n", count, use_mdat ? "MDAT" : "TCLK");
+    printf("Timeline completed: %zu events sent via TCLK\n", count);
 }
