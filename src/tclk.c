@@ -9,10 +9,10 @@
 #include "hardware/sync.h"
 
 // Include the PIO program headers (will be generated during build)
-#include "clockIN.pio.h"
-#include "clockDecode.pio.h"
-#include "clockEncode.pio.h"
-#include "clockOUT.pio.h"
+#include "tclkIN.pio.h"
+#include "tclkDecode.pio.h"
+#include "tclkEncode.pio.h"
+#include "tclkOUT.pio.h"
 
 bool tclk_init(tclk_t* tclk, PIO pio_instance, uint clock_in_pin, uint clock_out_pin) {
     if (!tclk) return false;
@@ -69,22 +69,22 @@ bool tclk_init(tclk_t* tclk, PIO pio_instance, uint clock_in_pin, uint clock_out
     }
     
     // Load PIO programs
-    tclk->offset_in = pio_add_program(tclk->pio, &clockIN_program);
-    tclk->offset_decode = pio_add_program(tclk->pio, &clockDecode_program);
-    tclk->offset_encode = pio_add_program(tclk->pio, &clockEncode_program);
-    tclk->offset_out = pio_add_program(tclk->pio, &clockOUT_program);
+    tclk->offset_in = pio_add_program(tclk->pio, &tclkIN_program);
+    tclk->offset_decode = pio_add_program(tclk->pio, &tclkDecode_program);
+    tclk->offset_encode = pio_add_program(tclk->pio, &tclkEncode_program);
+    tclk->offset_out = pio_add_program(tclk->pio, &tclkOUT_program);
     
-    // Initialize the clockIN program
-    clockIN_program_init(tclk->pio, tclk->sm_in, tclk->offset_in, tclk->clock_in_pin);
+    // Initialize the tclkIN program
+    tclkIN_program_init(tclk->pio, tclk->sm_in, tclk->offset_in, tclk->clock_in_pin);
     
-    // Initialize the clockDecode program
-    clockDecode_program_init(tclk->pio, tclk->sm_decode, tclk->offset_decode);
+    // Initialize the tclkDecode program
+    tclkDecode_program_init(tclk->pio, tclk->sm_decode, tclk->offset_decode);
     
-    // Initialize the clockEncode program
-    clockEncode_program_init(tclk->pio, tclk->sm_encode, tclk->offset_encode);
+    // Initialize the tclkEncode program
+    tclkEncode_program_init(tclk->pio, tclk->sm_encode, tclk->offset_encode);
     
-    // Initialize the clockOUT program
-    clockOUT_program_init(tclk->pio, tclk->sm_out, tclk->offset_out, tclk->clock_out_pin);
+    // Initialize the tclkOUT program
+    tclkOUT_program_init(tclk->pio, tclk->sm_out, tclk->offset_out, tclk->clock_out_pin);
     
     return true;
 }
@@ -104,7 +104,7 @@ bool tclk_start(tclk_t* tclk) {
     pio_sm_set_enabled(tclk->pio, tclk->sm_encode, true);
     pio_sm_set_enabled(tclk->pio, tclk->sm_out, true);
     
-    // Set up DMA to transfer data from clockIN to clockDecode
+    // Set up DMA to transfer data from tclkIN to tclkDecode
     dma_channel_config c_in = dma_channel_get_default_config(tclk->dma_channel_in);
     channel_config_set_transfer_data_size(&c_in, DMA_SIZE_32);
     channel_config_set_read_increment(&c_in, false);
@@ -114,13 +114,13 @@ bool tclk_start(tclk_t* tclk) {
     dma_channel_configure(
         tclk->dma_channel_in,
         &c_in,
-        &tclk->pio->txf[tclk->sm_decode],  // Write to clockDecode TX FIFO
-        &tclk->pio->rxf[tclk->sm_in],      // Read from clockIN RX FIFO
+        &tclk->pio->txf[tclk->sm_decode],  // Write to tclkDecode TX FIFO
+        &tclk->pio->rxf[tclk->sm_in],      // Read from tclkIN RX FIFO
         0,                                  // Transfer forever
         true                                // Start immediately
     );
     
-    // Set up DMA to transfer data from clockEncode to clockOUT
+    // Set up DMA to transfer data from tclkEncode to tclkOUT
     dma_channel_config c_out = dma_channel_get_default_config(tclk->dma_channel_out);
     channel_config_set_transfer_data_size(&c_out, DMA_SIZE_32);
     channel_config_set_read_increment(&c_out, false);
@@ -130,8 +130,8 @@ bool tclk_start(tclk_t* tclk) {
     dma_channel_configure(
         tclk->dma_channel_out,
         &c_out,
-        &tclk->pio->txf[tclk->sm_out],     // Write to clockOUT TX FIFO
-        &tclk->pio->rxf[tclk->sm_encode],  // Read from clockEncode RX FIFO
+        &tclk->pio->txf[tclk->sm_out],     // Write to tclkOUT TX FIFO
+        &tclk->pio->rxf[tclk->sm_encode],  // Read from tclkEncode RX FIFO
         0,                                  // Transfer forever
         true                                // Start immediately
     );
@@ -159,24 +159,24 @@ void tclk_stop(tclk_t* tclk) {
 bool tclk_send_byte(tclk_t* tclk, uint8_t byte) {
     if (!tclk || !tclk->is_running) return false;
     
-    // Send the byte to the clockEncode state machine
-    clockEncode_send_byte(tclk->pio, tclk->sm_encode, byte);
+    // Send the byte to the tclkEncode state machine
+    tclkEncode_send_byte(tclk->pio, tclk->sm_encode, byte);
     return true;
 }
 
 size_t tclk_send_bytes(tclk_t* tclk, const uint8_t* buffer, size_t length) {
     if (!tclk || !tclk->is_running || !buffer || length == 0) return 0;
     
-    // Send the bytes to the clockEncode state machine
-    clockEncode_send_bytes(tclk->pio, tclk->sm_encode, buffer, length);
+    // Send the bytes to the tclkEncode state machine
+    tclkEncode_send_bytes(tclk->pio, tclk->sm_encode, buffer, length);
     return length;
 }
 
 bool tclk_receive_byte(tclk_t* tclk, uint8_t* byte) {
     if (!tclk || !tclk->is_running || !byte) return false;
     
-    // Receive a byte from the clockDecode state machine
-    return clockDecode_get_byte(tclk->pio, tclk->sm_decode, byte);
+    // Receive a byte from the tclkDecode state machine
+    return tclkDecode_get_byte(tclk->pio, tclk->sm_decode, byte);
 }
 
 // Define the TCLK pattern to look for during synchronization
@@ -250,8 +250,8 @@ size_t tclk_receive_bytes(tclk_t* tclk, uint8_t* buffer, size_t max_length, uint
     // Get the current timestamp before receiving bytes
     uint64_t current_time = time_us_64();
     
-    // Receive bytes from the clockDecode state machine
-    size_t bytes_received = clockDecode_get_bytes(tclk->pio, tclk->sm_decode, buffer, max_length);
+    // Receive bytes from the tclkDecode state machine
+    size_t bytes_received = tclkDecode_get_bytes(tclk->pio, tclk->sm_decode, buffer, max_length);
     
     // If requested, store the timestamp of the last bit
     if (last_bit_timestamp != NULL && bytes_received > 0) {

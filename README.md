@@ -14,10 +14,10 @@ This project implements the TCLK (Tevatron Clock) protocol for the Raspberry Pi 
     * 1 parity bit (odd parity)
     * 2 guaranteed '1's after each event
 - **PIO-based Implementation**:
-  - **clockIN**: Listens to an input clock signal and timestamps transitions with a resolution of 50ns
-  - **clockDecode**: Processes the timestamps and decodes data according to the TCLK protocol
-  - **clockEncode**: Encodes data according to the TCLK protocol and generates timestamps
-  - **clockOUT**: Generates an output clock signal based on the encoded timestamps
+  - **tclkIN**: Listens to an input clock signal and timestamps transitions with a resolution of 50ns
+  - **tclkDecode**: Processes the timestamps and decodes data according to the TCLK protocol
+  - **tclkEncode**: Encodes data according to the TCLK protocol and generates timestamps
+  - **tclkOUT**: Generates an output clock signal based on the encoded timestamps
 - **Docker-based Build Environment**: Encapsulates the entire build environment for easy setup and reproducibility
 - **Multi-core Processing**: Uses both cores of the Raspberry Pi Pico for efficient processing
 
@@ -30,10 +30,10 @@ pico-clock/
 ├── include/                # Header files
 │   └── tclk.h
 ├── pio/                    # PIO programs
-│   ├── clockIN.pio
-│   ├── clockDecode.pio
-│   ├── clockEncode.pio
-│   └── clockOUT.pio
+│   ├── tclkIN.pio
+│   ├── tclkDecode.pio
+│   ├── tclkEncode.pio
+│   └── tclkOUT.pio
 ├── scripts/                # Build and flash scripts
 │   ├── build.sh
 │   └── flash.sh

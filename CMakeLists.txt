@@ -13,17 +13,29 @@ pico_sdk_init()
 
 # Add PIO files
 set(PIO_FILES
-    ${CMAKE_CURRENT_LIST_DIR}/pio/clockIN.pio
-    ${CMAKE_CURRENT_LIST_DIR}/pio/clockDecode.pio
-    ${CMAKE_CURRENT_LIST_DIR}/pio/clockEncode.pio
-    ${CMAKE_CURRENT_LIST_DIR}/pio/clockOUT.pio
+    # TCLK PIO files
+    ${CMAKE_CURRENT_LIST_DIR}/pio/tclkIN.pio
+    ${CMAKE_CURRENT_LIST_DIR}/pio/tclkDecode.pio
+    ${CMAKE_CURRENT_LIST_DIR}/pio/tclkEncode.pio
+    ${CMAKE_CURRENT_LIST_DIR}/pio/tclkOUT.pio
+    # MDAT PIO files
+    ${CMAKE_CURRENT_LIST_DIR}/pio/mdatIN.pio
+    ${CMAKE_CURRENT_LIST_DIR}/pio/mdatDecode.pio
+    ${CMAKE_CURRENT_LIST_DIR}/pio/mdatEncode.pio
+    ${CMAKE_CURRENT_LIST_DIR}/pio/mdatOUT.pio
 )
 
-# Generate PIO headers
-pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/clockIN.pio)
-pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/clockDecode.pio)
-pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/clockEncode.pio)
-pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/clockOUT.pio)
+# Generate PIO headers for TCLK
+pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/tclkIN.pio)
+pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/tclkDecode.pio)
+pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/tclkEncode.pio)
+pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/tclkOUT.pio)
+
+# Generate PIO headers for MDAT
+pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/mdatIN.pio)
+pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/mdatDecode.pio)
+pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/mdatEncode.pio)
+pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/mdatOUT.pio)
 
 # Add include directories
 include_directories(${CMAKE_CURRENT_LIST_DIR}/include)
@@ -32,6 +44,7 @@ include_directories(${CMAKE_CURRENT_LIST_DIR}/include)
 add_executable(${PROJECT_NAME}
     src/main.cpp
     src/tclk.c
+    src/mdat.c
 )
 
 # Link libraries
