@@ -42,7 +42,7 @@ jobs:
           /bin/bash -c "/app/scripts/build.sh"
       
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v2
       with:
         name: pico-clock-firmware
         path: |
