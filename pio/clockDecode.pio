@@ -1,0 +1,208 @@
+;
+; ClockDecode PIO program for Raspberry Pi Pico
+; 
+; This PIO program processes timestamps from clockIN and decodes
+; data according to the TCLK protocol as described in TCLK_Paper.pdf:
+; - Uses bi-phase (modified Manchester) coding
+; - Transition at each bit cell boundary
+; - Additional transition at mid-cell if bit is 1, no transition if bit is 0
+; - Word length is 12 bits:
+;   * 1 start bit (always 0)
+;   * 8 data bits
+;   * 1 parity bit (odd parity)
+;   * 2 guaranteed '1's after each event
+;
+
+.program clockDecode
+.define PUBLIC BIT_CELL 50       ; Bit cell duration in nanoseconds (half of bit period)
+.define PUBLIC BIT_PERIOD 100    ; Full bit period in nanoseconds
+.define PUBLIC MID_CELL_MARGIN 25 ; Margin for detecting mid-cell transitions (±25ns)
+
+.wrap_target
+    ; Wait for a start bit (0)
+wait_for_start:
+    pull                         ; Pull timestamp from FIFO
+    mov x, osr                   ; Store timestamp in X
+    pull                         ; Pull next timestamp from FIFO
+    mov y, osr                   ; Store timestamp in Y
+    
+    sub y, x                     ; Calculate time difference between timestamps
+    
+    ; Check if this is a bit boundary transition
+    ; We expect transitions at bit boundaries (every BIT_PERIOD)
+    ; and possibly at mid-cell (BIT_CELL after bit boundary)
+    
+    ; If time difference is close to BIT_PERIOD, it's a bit boundary without mid-cell transition (0 bit)
+    ; If time difference is close to BIT_CELL, it's a mid-cell transition (1 bit)
+    
+    ; Check if this could be a start bit (0)
+    ; For a start bit, we expect no mid-cell transition, so time difference should be BIT_PERIOD
+    mov isr, BIT_PERIOD          ; Load BIT_PERIOD into ISR
+    sub isr, y                   ; Calculate |BIT_PERIOD - time_diff|
+    jmp !isr, found_start_bit    ; If close to BIT_PERIOD, it's a start bit
+    
+    ; Not a start bit, continue looking
+    jmp wait_for_start
+    
+found_start_bit:
+    ; We found a start bit (0), now decode the 8 data bits
+    ; Initialize byte accumulator
+    set x, 0                     ; X will hold our decoded byte
+    set osr, 8                   ; Set bit counter to 8
+    
+bit_loop:
+    ; Get next transition
+    pull                         ; Pull timestamp from FIFO
+    mov isr, y                   ; Store previous timestamp in ISR
+    mov y, osr                   ; Store new timestamp in Y
+    
+    sub y, isr                   ; Calculate time difference
+    
+    ; Check if this is a mid-cell transition (indicating a 1)
+    mov isr, BIT_CELL            ; Load BIT_CELL into ISR
+    sub isr, MID_CELL_MARGIN     ; Calculate lower bound
+    jmp y<isr, not_mid_cell      ; If below lower bound, not a mid-cell transition
+    
+    mov isr, BIT_CELL            ; Load BIT_CELL into ISR
+    add isr, MID_CELL_MARGIN     ; Calculate upper bound
+    jmp y>isr, not_mid_cell      ; If above upper bound, not a mid-cell transition
+    
+    ; This is a mid-cell transition, so bit is 1
+    ; Shift in a 1 bit
+    shl x, 1                     ; Shift left
+    or x, 1                      ; Set LSB to 1
+    
+    ; Get the next bit boundary transition
+    pull                         ; Pull timestamp from FIFO
+    mov isr, y                   ; Store previous timestamp in ISR
+    mov y, osr                   ; Store new timestamp in Y
+    
+    jmp bit_counter              ; Continue to bit counter
+    
+not_mid_cell:
+    ; No mid-cell transition, so bit is 0
+    ; Shift in a 0 bit
+    shl x, 1                     ; Shift left (LSB already 0)
+    
+bit_counter:
+    ; Decrement bit counter and check if we're done
+    jmp osr--, bit_loop_check    ; Decrement bit counter
+bit_loop_check:
+    jmp !osre bit_loop           ; If not done with all 8 bits, continue loop
+    
+    ; We've decoded 8 data bits, now check parity bit
+    ; Get next transition
+    pull                         ; Pull timestamp from FIFO
+    mov isr, y                   ; Store previous timestamp in ISR
+    mov y, osr                   ; Store new timestamp in Y
+    
+    sub y, isr                   ; Calculate time difference
+    
+    ; Check if this is a mid-cell transition (indicating a 1 parity bit)
+    mov isr, BIT_CELL            ; Load BIT_CELL into ISR
+    sub isr, MID_CELL_MARGIN     ; Calculate lower bound
+    jmp y<isr, parity_bit_zero   ; If below lower bound, parity bit is 0
+    
+    mov isr, BIT_CELL            ; Load BIT_CELL into ISR
+    add isr, MID_CELL_MARGIN     ; Calculate upper bound
+    jmp y>isr, parity_bit_zero   ; If above upper bound, parity bit is 0
+    
+    ; Parity bit is 1
+    mov isr, 1                   ; Store parity bit in ISR
+    jmp check_parity
+    
+parity_bit_zero:
+    ; Parity bit is 0
+    mov isr, 0                   ; Store parity bit in ISR
+    
+check_parity:
+    ; Calculate expected parity (odd parity)
+    mov y, x                     ; Copy data byte to Y for parity calculation
+    mov osr, 0                   ; Initialize parity counter
+parity_calc_loop:
+    jmp !y, skip_parity_calc     ; Skip if bit is 0
+    jmp osr, toggle_calc_parity  ; Toggle parity if it's 1
+    set osr, 1                   ; Set parity to 1
+    jmp next_parity_calc_bit
+toggle_calc_parity:
+    set osr, 0                   ; Set parity to 0
+next_parity_calc_bit:
+    shr y, 1                     ; Shift to next bit
+    jmp y, parity_calc_loop      ; Continue until all bits processed
+skip_parity_calc:
+    
+    ; At this point, OSR contains the expected parity bit (1 for odd parity)
+    ; Compare with actual parity bit in ISR
+    jmp osr!=isr, parity_error   ; If parity doesn't match, discard byte
+    
+    ; Skip the two guaranteed '1's
+    ; First '1'
+    pull                         ; Pull timestamp for bit boundary transition
+    pull                         ; Pull timestamp for mid-cell transition (should be there for a '1')
+    
+    ; Second '1'
+    pull                         ; Pull timestamp for bit boundary transition
+    pull                         ; Pull timestamp for mid-cell transition (should be there for a '1')
+    
+    ; We have a valid byte with correct parity, push it to the output FIFO
+    mov isr, x                   ; Move decoded byte to ISR
+    push                         ; Push byte to output FIFO
+    
+    ; Ready for next byte
+    jmp wait_for_start
+    
+parity_error:
+    ; Parity error, discard this byte and skip the two '1's
+    ; First '1'
+    pull                         ; Pull timestamp for bit boundary transition
+    pull                         ; Pull timestamp for mid-cell transition
+    
+    ; Second '1'
+    pull                         ; Pull timestamp for bit boundary transition
+    pull                         ; Pull timestamp for mid-cell transition
+    
+    ; Ready for next byte
+    jmp wait_for_start
+.wrap
+
+% c-sdk {
+static inline void clockDecode_program_init(PIO pio, uint sm, uint offset) {
+    pio_sm_config c = clockDecode_program_get_default_config(offset);
+    
+    // Configure the state machine
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX); // Join FIFOs to increase size
+    
+    // Load the configuration and start the program
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+// Function to read a decoded byte from the PIO FIFO
+static inline bool clockDecode_get_byte(PIO pio, uint sm, uint8_t* byte) {
+    // Check if there's data available
+    if (pio_sm_is_rx_fifo_empty(pio, sm)) {
+        return false;
+    }
+    
+    // Read the byte
+    *byte = pio_sm_get(pio, sm) & 0xFF;
+    return true;
+}
+
+// Function to read multiple decoded bytes
+static inline size_t clockDecode_get_bytes(PIO pio, uint sm, uint8_t* buffer, size_t max_bytes) {
+    size_t bytes_read = 0;
+    
+    while (bytes_read < max_bytes) {
+        uint8_t byte;
+        if (!clockDecode_get_byte(pio, sm, &byte)) {
+            // No more data available
+            break;
+        }
+        
+        buffer[bytes_read++] = byte;
+    }
+    
+    return bytes_read;
+}
+%}
