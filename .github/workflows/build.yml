@@ -40,12 +40,3 @@ jobs:
           -v ${{ github.workspace }}/build:/app/build \
           pico-clock-builder:latest \
           /bin/bash -c "/app/scripts/build.sh"
-      
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v2
-      with:
-        name: pico-clock-firmware
-        path: |
-          build/pico-clock.uf2
-          build/pico-clock.bin
-          build/pico-clock.elf
