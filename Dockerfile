@@ -43,11 +43,5 @@ RUN git clone --depth 1 https://github.com/raspberrypi/picotool.git \
 # Create build directory
 RUN mkdir -p /app/build
 
-# Copy project files
-COPY . /app/
-
-# Copy scripts and make them executable
-RUN chmod +x /app/scripts/build.sh /app/scripts/flash.sh
-
 # Default command
 CMD ["/bin/bash"]
