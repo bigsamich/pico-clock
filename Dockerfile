@@ -64,7 +64,7 @@ fi\n\
 DEVICE=$1\n\
 \n\
 cd /app/build\n\
-picotool load -f piClk.uf2 -t uf2 -d $DEVICE\n\
+picotool load -f pico-clock.uf2 -t uf2 -d $DEVICE\n\
 ' > /app/flash.sh && chmod +x /app/flash.sh
 
 # Default command

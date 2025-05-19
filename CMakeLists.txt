@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.13)
 include(cmake/pico_sdk_import.cmake)
 
 # Set project name and language
-project(piClk C CXX ASM)
+project(pico-clock C CXX ASM)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 

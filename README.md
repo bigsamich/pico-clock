@@ -1,4 +1,4 @@
-# Raspberry Pi Pico TCLK Protocol Implementation (piClk)
+# Raspberry Pi Pico TCLK Protocol Implementation (pico-clock)
 
 This project implements the TCLK (Tevatron Clock) protocol for the Raspberry Pi Pico using the Programmable Input/Output (PIO) feature. It captures and timestamps input clock signals with a resolution of 50ns and implements the bi-phase (modified Manchester) encoding protocol as described in the TCLK_Paper.pdf.
 
@@ -24,7 +24,7 @@ This project implements the TCLK (Tevatron Clock) protocol for the Raspberry Pi 
 ## Project Structure
 
 ```
-piClk/
+pico-clock/
 ├── cmake/                  # CMake modules
 │   └── pico_sdk_import.cmake
 ├── include/                # Header files
@@ -53,16 +53,16 @@ piClk/
 1. **Build the Docker image**:
 
    ```bash
-   docker build -t piclk-builder .
+   docker build -t pico-clock-builder .
    ```
 
 2. **Run the Docker container and build the project**:
 
    ```bash
-   docker run --rm -v $(pwd):/app piclk-builder /app/build.sh
+   docker run --rm -v $(pwd):/app pico-clock-builder /app/build.sh
    ```
 
-   This will create the build artifacts in the `build` directory, including `piClk.uf2` which can be flashed to the Raspberry Pi Pico.
+   This will create the build artifacts in the `build` directory, including `pico-clock.uf2` which can be flashed to the Raspberry Pi Pico.
 
 ## Flashing to the Raspberry Pi Pico
 
@@ -73,7 +73,7 @@ piClk/
 2. Run the Docker container with USB device access:
 
    ```bash
-   docker run --rm -v $(pwd):/app --device=/dev/ttyACM0 piclk-builder /app/flash.sh /dev/ttyACM0
+   docker run --rm -v $(pwd):/app --device=/dev/ttyACM0 pico-clock-builder /app/flash.sh /dev/ttyACM0
    ```
 
    Replace `/dev/ttyACM0` with the actual device path of your Raspberry Pi Pico.
@@ -84,10 +84,10 @@ piClk/
 
 2. The Pico will appear as a USB mass storage device.
 
-3. Copy the `build/piClk.uf2` file to the Pico:
+3. Copy the `build/pico-clock.uf2` file to the Pico:
 
    ```bash
-   cp build/piClk.uf2 /media/YOUR_USERNAME/RPI-RP2/
+   cp build/pico-clock.uf2 /media/YOUR_USERNAME/RPI-RP2/
    ```
 
    Replace `YOUR_USERNAME` with your actual username.
