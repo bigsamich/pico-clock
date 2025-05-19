@@ -1,0 +1,110 @@
+;
+; MdatEncode PIO program for Raspberry Pi Pico
+; 
+; This PIO program encodes data using the MDAT protocol:
+; - 28-bit frame length
+; - Self-clocking at 10 MBit/s
+; - Frame is always 2.75 microseconds in length
+; - Parity ensures consistent frame length
+;
+; The encoded data is output as timestamps for the mdatOUT program.
+;
+
+.program mdatEncode
+.define PUBLIC BIT_CELL 50       ; Bit cell duration in nanoseconds (half of bit period)
+.define PUBLIC BIT_PERIOD 100    ; Full bit period in nanoseconds
+.define PUBLIC FRAME_LENGTH 2750 ; Frame length in nanoseconds (2.75 microseconds)
+.define PUBLIC MDAT_FRAME_BITS 28 ; Total bits in an MDAT frame
+
+.wrap_target
+    pull                         ; Pull a byte from FIFO
+    mov x, osr                   ; Store byte in X
+    
+    ; Calculate parity bits to ensure frame length is always 2.75 microseconds
+    ; In a real implementation, this would be more sophisticated based on the
+    ; specific MDAT protocol requirements
+    
+    ; For simplicity, we'll just use a fixed parity pattern for now
+    mov y, 0                     ; Start with timestamp 0 (relative timing)
+    
+    ; Send frame start pattern
+    ; This is a simplified pattern - in a real implementation, you would
+    ; have a specific start pattern for MDAT frames
+    push                         ; Push timestamp for frame start
+    add y, BIT_PERIOD            ; Add full bit period
+    push                         ; Push timestamp for next transition
+    
+    ; Send 8 data bits (LSB first)
+    set osr, 8                   ; Set bit counter to 8 (tracks remaining bits to send)
+bit_loop:
+    ; Check if current bit is 1 or 0
+    mov isr, x                   ; Copy data byte to ISR
+    and isr, 1                   ; Isolate LSB
+    jmp !isr, send_zero          ; If bit is 0, jump to send_zero
+    
+    ; Send a 1 bit
+    push                         ; Push timestamp for bit transition
+    add y, BIT_CELL              ; Add half bit period
+    push                         ; Push timestamp for next transition
+    add y, BIT_CELL              ; Add half bit period to complete the bit
+    jmp next_bit
+    
+send_zero:
+    ; Send a 0 bit
+    push                         ; Push timestamp for bit transition
+    add y, BIT_PERIOD            ; Add full bit period
+    
+next_bit:
+    shr x, 1                     ; Shift to next bit in data byte
+    jmp osr--, bit_loop          ; Loop until all 8 bits are sent
+    
+    ; Send remaining bits to complete the 28-bit frame
+    ; In a real implementation, you would encode the full 28 bits
+    ; including any control bits, parity bits, etc.
+    ; For simplicity, we'll just send a fixed pattern for the remaining bits
+    
+    ; Send 20 more bits to complete the 28-bit frame
+    set osr, 20                  ; Set bit counter to 20
+remaining_bits_loop:
+    ; Send a 0 bit
+    push                         ; Push timestamp for bit transition
+    add y, BIT_PERIOD            ; Add full bit period
+    
+    ; Decrement counter and check if we're done
+    jmp osr--, remaining_bits_check
+remaining_bits_check:
+    jmp !osre remaining_bits_loop ; If not done with all bits, continue loop
+    
+    ; Frame complete
+    push                         ; Push final timestamp
+.wrap
+
+% c-sdk {
+static inline void mdatEncode_program_init(PIO pio, uint sm, uint offset) {
+    pio_sm_config c = mdatEncode_program_get_default_config(offset);
+    
+    // Configure the state machine
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX); // Join FIFOs to increase size
+    
+    // Load the configuration and start the program
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+// Function to send a byte to be encoded as an MDAT event
+static inline void mdatEncode_send_byte(PIO pio, uint sm, uint8_t byte) {
+    // Wait for space in the FIFO
+    while (pio_sm_is_tx_fifo_full(pio, sm))
+        tight_loop_contents();
+    
+    // Send the byte
+    pio_sm_put(pio, sm, byte);
+}
+
+// Function to send multiple bytes to be encoded as MDAT events
+static inline void mdatEncode_send_bytes(PIO pio, uint sm, const uint8_t* buffer, size_t length) {
+    for (size_t i = 0; i < length; i++) {
+        mdatEncode_send_byte(pio, sm, buffer[i]);
+    }
+}
+%}

@@ -1,0 +1,131 @@
+;
+; MdatDecode PIO program for Raspberry Pi Pico
+; 
+; This PIO program processes timestamps from mdatIN and decodes
+; data according to the MDAT protocol:
+; - 28-bit frame length
+; - Self-clocking at 10 MBit/s
+; - Frame is always 2.75 microseconds in length
+; - Parity ensures consistent frame length
+;
+
+.program mdatDecode
+.define PUBLIC BIT_CELL 50       ; Bit cell duration in nanoseconds (half of bit period)
+.define PUBLIC BIT_PERIOD 100    ; Full bit period in nanoseconds
+.define PUBLIC FRAME_LENGTH 2750 ; Frame length in nanoseconds (2.75 microseconds)
+.define PUBLIC MDAT_FRAME_BITS 28 ; Total bits in an MDAT frame
+
+.wrap_target
+    ; Wait for the start of a frame
+wait_for_start:
+    pull                         ; Pull timestamp from FIFO
+    mov x, osr                   ; Store timestamp in X
+    pull                         ; Pull next timestamp from FIFO
+    mov y, osr                   ; Store timestamp in Y
+    
+    sub y, x                     ; Calculate time difference between timestamps
+    
+    ; Check if this could be the start of a frame
+    ; For MDAT, we look for a specific pattern at the start of the frame
+    ; This is a simplified detection - in a real implementation, you would
+    ; have more sophisticated pattern detection
+    
+    mov isr, BIT_PERIOD          ; Load BIT_PERIOD into ISR
+    sub isr, y                   ; Calculate |BIT_PERIOD - time_diff|
+    jmp !isr, found_frame_start  ; If close to BIT_PERIOD, it might be a frame start
+    
+    ; Not a frame start, continue looking
+    jmp wait_for_start
+    
+found_frame_start:
+    ; We found what might be the start of a frame, now decode the data bits
+    ; Initialize byte accumulator
+    set x, 0                     ; X will hold our decoded byte
+    set osr, 8                   ; Set bit counter to 8 (we'll decode 8 bits at a time)
+    
+bit_loop:
+    ; Get next transition
+    pull                         ; Pull timestamp from FIFO
+    mov isr, y                   ; Store previous timestamp in ISR
+    mov y, osr                   ; Store new timestamp in Y
+    
+    sub y, isr                   ; Calculate time difference
+    
+    ; Decode bit based on timing
+    ; For MDAT, the bit value is determined by the timing between transitions
+    ; This is a simplified decoding - in a real implementation, you would
+    ; have more sophisticated bit detection based on the specific MDAT protocol
+    
+    mov isr, BIT_CELL            ; Load BIT_CELL into ISR
+    sub isr, y                   ; Calculate |BIT_CELL - time_diff|
+    jmp !isr, bit_is_one         ; If close to BIT_CELL, it's a 1 bit
+    
+    ; Bit is 0
+    shl x, 1                     ; Shift left (LSB already 0)
+    jmp bit_counter
+    
+bit_is_one:
+    ; Bit is 1
+    shl x, 1                     ; Shift left
+    or x, 1                      ; Set LSB to 1
+    
+bit_counter:
+    ; Decrement bit counter and check if we've decoded 8 bits
+    jmp osr--, bit_loop_check    ; Decrement bit counter
+bit_loop_check:
+    jmp !osre bit_loop           ; If not done with all 8 bits, continue loop
+    
+    ; We've decoded 8 data bits, push to output FIFO
+    mov isr, x                   ; Move decoded byte to ISR
+    push                         ; Push byte to output FIFO
+    
+    ; Check if we've decoded all 28 bits of the frame
+    ; In a real implementation, you would keep track of the total bits decoded
+    ; and verify the frame integrity, parity, etc.
+    ; For simplicity, we'll just decode 8 bits at a time and push them out
+    
+    ; Ready for next byte or frame
+    jmp wait_for_start
+.wrap
+
+% c-sdk {
+static inline void mdatDecode_program_init(PIO pio, uint sm, uint offset) {
+    pio_sm_config c = mdatDecode_program_get_default_config(offset);
+    
+    // Configure the state machine
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX); // Join FIFOs to increase size
+    
+    // Load the configuration and start the program
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+// Function to read a decoded byte from the PIO FIFO
+static inline bool mdatDecode_get_byte(PIO pio, uint sm, uint8_t* byte) {
+    // Check if there's data available
+    if (pio_sm_is_rx_fifo_empty(pio, sm)) {
+        return false;
+    }
+    
+    // Read the byte
+    *byte = pio_sm_get(pio, sm) & 0xFF;
+    return true;
+}
+
+// Function to read multiple decoded bytes
+static inline size_t mdatDecode_get_bytes(PIO pio, uint sm, uint8_t* buffer, size_t max_bytes) {
+    size_t bytes_read = 0;
+    
+    while (bytes_read < max_bytes) {
+        uint8_t byte;
+        if (!mdatDecode_get_byte(pio, sm, &byte)) {
+            // No more data available
+            break;
+        }
+        
+        buffer[bytes_read++] = byte;
+    }
+    
+    return bytes_read;
+}
+%}

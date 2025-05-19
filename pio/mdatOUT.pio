@@ -1,0 +1,57 @@
+;
+; MdatOUT PIO program for Raspberry Pi Pico
+; 
+; This PIO program generates MDAT signals based on timestamps
+; for rising and falling edges. MDAT is a 10 Mbit/s self-clocking signal.
+;
+
+.program mdatOUT
+.define PUBLIC EDGE_DELAY 5  ; Small delay for edge transitions
+
+.wrap_target
+    ; Wait for a timestamp for a rising edge
+    pull                      ; Pull timestamp from FIFO
+    
+    ; Set the output pin high
+    set pins, 1               ; Set pin high
+    
+    ; Wait for a timestamp for a falling edge
+    pull                      ; Pull timestamp from FIFO
+    
+    ; Set the output pin low
+    set pins, 0               ; Set pin low
+    
+    ; Small delay before next edge
+    set x, EDGE_DELAY         ; Load delay counter
+delay_loop:
+    jmp x--, delay_loop       ; Decrement counter and loop if not zero
+    
+    ; Continue with next edge pair
+    ; No explicit jump needed due to .wrap
+.wrap
+
+% c-sdk {
+static inline void mdatOUT_program_init(PIO pio, uint sm, uint offset, uint pin) {
+    pio_sm_config c = mdatOUT_program_get_default_config(offset);
+    
+    // Map the state machine's SET pin group to the specified pin
+    sm_config_set_set_pins(&c, pin, 1);
+    
+    // Set this pin's GPIO function (connect PIO to the pad)
+    pio_gpio_init(pio, pin);
+    
+    // Set the pin direction to output at the PIO
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
+    
+    // Configure the state machine
+    sm_config_set_in_shift(&c, false, false, 32);  // No auto-shift
+    sm_config_set_out_shift(&c, false, false, 32); // No auto-shift
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX); // Join FIFOs to increase size
+    
+    // Load the configuration and start the program
+    pio_sm_init(pio, sm, offset, &c);
+    
+    // Initialize the pin to low
+    pio_sm_exec(pio, sm, pio_encode_set(pio_pins, 0));
+}
+%}
