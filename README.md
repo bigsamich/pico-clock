@@ -34,6 +34,9 @@ pico-clock/
 │   ├── clockDecode.pio
 │   ├── clockEncode.pio
 │   └── clockOUT.pio
+├── scripts/                # Build and flash scripts
+│   ├── build.sh
+│   └── flash.sh
 ├── src/                    # Source files
 │   ├── main.cpp
 │   └── tclk.c
@@ -59,7 +62,7 @@ pico-clock/
 2. **Run the Docker container and build the project**:
 
    ```bash
-   docker run --rm -v $(pwd):/app pico-clock-builder /app/build.sh
+   docker run --rm -v $(pwd):/app pico-clock-builder /app/scripts/build.sh
    ```
 
    This will create the build artifacts in the `build` directory, including `pico-clock.uf2` which can be flashed to the Raspberry Pi Pico.
@@ -73,7 +76,7 @@ pico-clock/
 2. Run the Docker container with USB device access:
 
    ```bash
-   docker run --rm -v $(pwd):/app --device=/dev/ttyACM0 pico-clock-builder /app/flash.sh /dev/ttyACM0
+   docker run --rm -v $(pwd):/app --device=/dev/ttyACM0 pico-clock-builder /app/scripts/flash.sh /dev/ttyACM0
    ```
 
    Replace `/dev/ttyACM0` with the actual device path of your Raspberry Pi Pico.

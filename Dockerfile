@@ -46,26 +46,8 @@ RUN mkdir -p /app/build
 # Copy project files
 COPY . /app/
 
-# Build script
-RUN echo '#!/bin/bash\n\
-cd /app/build\n\
-cmake ..\n\
-make -j$(nproc)\n\
-' > /app/build.sh && chmod +x /app/build.sh
-
-# Flash script
-RUN echo '#!/bin/bash\n\
-if [ -z "$1" ]; then\n\
-  echo "Usage: $0 <device>\n\
-Example: $0 /dev/ttyACM0"\n\
-  exit 1\n\
-fi\n\
-\n\
-DEVICE=$1\n\
-\n\
-cd /app/build\n\
-picotool load -f pico-clock.uf2 -t uf2 -d $DEVICE\n\
-' > /app/flash.sh && chmod +x /app/flash.sh
+# Copy scripts and make them executable
+RUN chmod +x /app/scripts/build.sh /app/scripts/flash.sh
 
 # Default command
 CMD ["/bin/bash"]
