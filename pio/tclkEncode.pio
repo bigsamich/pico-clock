@@ -25,21 +25,22 @@
     
     ; Calculate parity bit (odd parity)
     mov y, x                     ; Copy byte to Y for parity calculation
-    set pins, 0                  ; Initialize parity counter (using pins as temporary storage)
+    set x, 0                     ; Initialize parity counter in X
 parity_loop:
     jmp !y, skip_parity_count    ; Skip if bit is 0
-    jmp !pins, set_parity_one    ; If parity is 0, set to 1
-    set pins, 0                  ; Otherwise set parity to 0
+    jmp !x, set_parity_one       ; If parity is 0, set to 1
+    set x, 0                     ; Otherwise set parity to 0
     jmp next_parity_bit
 set_parity_one:
-    set pins, 1                  ; Set parity to 1
+    set x, 1                     ; Set parity to 1
 next_parity_bit:
     mov isr, y                   ; Copy y to ISR for shifting
     in isr, 1                    ; Shift right by 1
     mov y, isr                   ; Store back to y
-    jmp y, parity_loop           ; Continue until all bits processed
+    jmp !y, skip_parity_count    ; Exit if no more bits
+    jmp parity_loop              ; Continue until all bits processed
 skip_parity_count:
-    mov isr, pins                ; Store parity bit in ISR
+    mov isr, x                   ; Store parity bit in ISR
     
     ; Get current timestamp
     set y, 0                     ; Start with timestamp 0 (relative timing)
@@ -47,7 +48,7 @@ skip_parity_count:
     ; Send start bit (always 0)
     ; For a 0, we have transition at bit boundary but no transition at mid-cell
     push                         ; Push timestamp for bit boundary transition
-    mov x, BIT_PERIOD            ; Load BIT_PERIOD into X
+    set x, BIT_PERIOD            ; Load BIT_PERIOD into X
     add y, x                     ; Add full bit period
     push                         ; Push timestamp for next bit boundary transition
     
@@ -58,21 +59,22 @@ bit_loop:
     in null, 24                  ; Shift ISR right to make room for data byte
     mov isr, osr                 ; Copy data byte to ISR
     in isr, 1                    ; Isolate LSB
-    jmp !isr, send_zero          ; If bit is 0, jump to send_zero
+    mov x, isr                   ; Move bit to X
+    jmp !x, send_zero            ; If bit is 0, jump to send_zero
     
     ; Send a 1 bit (transition at bit boundary and mid-cell)
     push                         ; Push timestamp for bit boundary transition
-    mov isr, BIT_CELL            ; Load BIT_CELL into ISR
-    add y, isr                   ; Add half bit period for mid-cell transition
+    set x, BIT_CELL              ; Load BIT_CELL into X
+    add y, x                     ; Add half bit period for mid-cell transition
     push                         ; Push timestamp for mid-cell transition
-    add y, isr                   ; Add half bit period to complete the bit
+    add y, x                     ; Add half bit period to complete the bit
     jmp next_bit
     
 send_zero:
     ; Send a 0 bit (transition at bit boundary only)
     push                         ; Push timestamp for bit boundary transition
-    mov isr, BIT_PERIOD          ; Load BIT_PERIOD into ISR
-    add y, isr                   ; Add full bit period (no mid-cell transition)
+    set x, BIT_PERIOD            ; Load BIT_PERIOD into X
+    add y, x                     ; Add full bit period (no mid-cell transition)
     
 next_bit:
     jmp x--, bit_loop_check      ; Decrement bit counter
@@ -87,7 +89,7 @@ bit_loop_done:
     
     ; Send a 1 parity bit
     push                         ; Push timestamp for bit boundary transition
-    mov x, BIT_CELL              ; Load BIT_CELL into X
+    set x, BIT_CELL              ; Load BIT_CELL into X
     add y, x                     ; Add half bit period for mid-cell transition
     push                         ; Push timestamp for mid-cell transition
     add y, x                     ; Add half bit period to complete the bit
@@ -96,21 +98,21 @@ bit_loop_done:
 send_parity_zero:
     ; Send a 0 parity bit
     push                         ; Push timestamp for bit boundary transition
-    mov x, BIT_PERIOD            ; Load BIT_PERIOD into X
+    set x, BIT_PERIOD            ; Load BIT_PERIOD into X
     add y, x                     ; Add full bit period (no mid-cell transition)
     
 send_trailer:
     ; Send 2 guaranteed '1's (bits 11-12 of the TCLK frame)
     ; First '1' (bit 11)
     push                         ; Push timestamp for bit boundary transition
-    mov x, BIT_CELL              ; Load BIT_CELL into X
+    set x, BIT_CELL              ; Load BIT_CELL into X
     add y, x                     ; Add half bit period for mid-cell transition
     push                         ; Push timestamp for mid-cell transition
     add y, x                     ; Add half bit period to complete the bit
     
     ; Second '1' (bit 12 - completes the TCLK frame)
     push                         ; Push timestamp for bit boundary transition
-    mov x, BIT_CELL              ; Load BIT_CELL into X
+    set x, BIT_CELL              ; Load BIT_CELL into X
     add y, x                     ; Add half bit period for mid-cell transition
     push                         ; Push timestamp for mid-cell transition
     add y, x                     ; Add half bit period to complete the bit

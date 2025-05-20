@@ -37,10 +37,11 @@ wait_for_start:
     
     ; Check if this could be a start bit (0)
     ; For a start bit, we expect no mid-cell transition, so time difference should be BIT_PERIOD
-    mov x, BIT_PERIOD            ; Load BIT_PERIOD into X
+    set x, BIT_PERIOD            ; Load BIT_PERIOD into X
     mov isr, x                   ; Move to ISR
     sub isr, y                   ; Calculate |BIT_PERIOD - time_diff|
-    jmp !isr, found_start_bit    ; If close to BIT_PERIOD, it's a start bit
+    mov x, isr                   ; Move result to X
+    jmp !x, found_start_bit      ; If close to BIT_PERIOD, it's a start bit
     
     ; Not a start bit, continue looking
     jmp wait_for_start
@@ -60,9 +61,9 @@ bit_loop:
     sub y, isr                   ; Calculate time difference
     
     ; Check if this is a mid-cell transition (indicating a 1)
-    mov x, BIT_CELL              ; Load BIT_CELL into X
+    set x, BIT_CELL              ; Load BIT_CELL into X
     mov isr, x                   ; Move to ISR
-    mov x, MID_CELL_MARGIN       ; Load MID_CELL_MARGIN into X
+    set x, MID_CELL_MARGIN       ; Load MID_CELL_MARGIN into X
     sub isr, x                   ; Calculate lower bound
     
     ; Compare y with lower bound
@@ -73,9 +74,9 @@ bit_loop:
     jmp not_mid_cell             ; If y < lower_bound, not a mid-cell transition
     
 mid_cell_check_upper:
-    mov x, BIT_CELL              ; Load BIT_CELL into X
+    set x, BIT_CELL              ; Load BIT_CELL into X
     mov isr, x                   ; Move to ISR
-    mov x, MID_CELL_MARGIN       ; Load MID_CELL_MARGIN into X
+    set x, MID_CELL_MARGIN       ; Load MID_CELL_MARGIN into X
     add isr, x                   ; Calculate upper bound
     
     ; Compare y with upper bound
@@ -121,9 +122,9 @@ bit_loop_done:
     sub y, isr                   ; Calculate time difference
     
     ; Check if this is a mid-cell transition (indicating a 1 parity bit)
-    mov x, BIT_CELL              ; Load BIT_CELL into X
+    set x, BIT_CELL              ; Load BIT_CELL into X
     mov isr, x                   ; Move to ISR
-    mov x, MID_CELL_MARGIN       ; Load MID_CELL_MARGIN into X
+    set x, MID_CELL_MARGIN       ; Load MID_CELL_MARGIN into X
     sub isr, x                   ; Calculate lower bound
     
     ; Compare y with lower bound
@@ -134,9 +135,9 @@ bit_loop_done:
     jmp parity_bit_zero          ; If y < lower_bound, parity bit is 0
     
 parity_check_upper:
-    mov x, BIT_CELL              ; Load BIT_CELL into X
+    set x, BIT_CELL              ; Load BIT_CELL into X
     mov isr, x                   ; Move to ISR
-    mov x, MID_CELL_MARGIN       ; Load MID_CELL_MARGIN into X
+    set x, MID_CELL_MARGIN       ; Load MID_CELL_MARGIN into X
     add isr, x                   ; Calculate upper bound
     
     ; Compare y with upper bound

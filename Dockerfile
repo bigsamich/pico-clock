@@ -43,5 +43,5 @@ RUN git clone --depth 1 https://github.com/raspberrypi/picotool.git \
 # Create build directory
 RUN mkdir -p /app/build
 
-# Default command
-CMD ["/bin/bash"]
+# Default command to keep the container running
+CMD ["tail", "-f", "/dev/null"] 

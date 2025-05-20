@@ -32,7 +32,7 @@ include_directories(${CMAKE_CURRENT_LIST_DIR}/include)
 add_executable(${PROJECT_NAME}
     src/main.cpp
     src/tclk.c
-    # src/mdat.c is excluded from build but kept in the project
+    # src/mdat.c exclude from build: todo
 )
 
 # Generate PIO headers for TCLK
