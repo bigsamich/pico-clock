@@ -17,6 +17,8 @@
 .define PUBLIC BIT_CELL 50       ; Bit cell duration in nanoseconds (half of bit period)
 .define PUBLIC BIT_PERIOD 100    ; Full bit period in nanoseconds
 .define PUBLIC MID_CELL_MARGIN 25 ; Margin for detecting mid-cell transitions (±25ns)
+.define BIT_CELL_MIN (BIT_CELL - MID_CELL_MARGIN)
+.define BIT_CELL_MAX (BIT_CELL + MID_CELL_MARGIN)
 
 .wrap_target
     ; Wait for a start bit (0)
@@ -26,212 +28,84 @@ wait_for_start:
     pull                         ; Pull next timestamp from FIFO
     mov y, osr                   ; Store timestamp in Y
     
+    ; Calculate time difference
     mov isr, y                   ; Store y in ISR temporarily
     mov y, x                     ; Move x to y
     mov x, isr                   ; Move original y to x
-    sub x, y                     ; Calculate time difference (x = x - y)
-    mov y, x                     ; Store result in y
-    
-    ; Check if this is a bit boundary transition
-    ; We expect transitions at bit boundaries (every BIT_PERIOD)
-    ; and possibly at mid-cell (BIT_CELL after bit boundary)
-    
-    ; If time difference is close to BIT_PERIOD, it's a bit boundary without mid-cell transition (0 bit)
-    ; If time difference is close to BIT_CELL, it's a mid-cell transition (1 bit)
+    sub x, x, y                  ; Calculate time difference (x = x - y)
     
     ; Check if this could be a start bit (0)
     ; For a start bit, we expect no mid-cell transition, so time difference should be BIT_PERIOD
-    set x, BIT_PERIOD            ; Load BIT_PERIOD into X
-    mov isr, x                   ; Move to ISR
-    mov x, y                     ; Move time_diff to x
-    mov y, isr                   ; Move BIT_PERIOD to y
-    sub x, y                     ; Calculate |BIT_PERIOD - time_diff| (x = x - y)
-    jmp !x, found_start_bit      ; If close to BIT_PERIOD, it's a start bit
+    set y, BIT_PERIOD            ; Load BIT_PERIOD into Y
+    jmp x!=y, wait_for_start     ; If not close to BIT_PERIOD, not a start bit
     
-    ; Not a start bit, continue looking
-    jmp wait_for_start
-    
-found_start_bit:
     ; We found a start bit (0), now decode the 8 data bits
-    ; Initialize byte accumulator
     set x, 0                     ; X will hold our decoded byte
     set y, 8                     ; Set bit counter to 8
     
 bit_loop:
     ; Get next transition
     pull                         ; Pull timestamp from FIFO
-    mov isr, y                   ; Store previous timestamp in ISR
-    mov y, osr                   ; Store new timestamp in Y
+    mov isr, osr                 ; Store timestamp in ISR
+    pull                         ; Pull next timestamp from FIFO
+    mov x, osr                   ; Store timestamp in X
     
-    mov x, y                     ; Store current timestamp in x
-    mov y, isr                   ; Move previous timestamp to y
-    sub x, y                     ; Calculate time difference (x = x - y)
-    mov y, x                     ; Store result in y
+    ; Calculate time difference
+    sub x, x, isr                ; x = x - isr (time difference)
     
     ; Check if this is a mid-cell transition (indicating a 1)
-    set x, BIT_CELL              ; Load BIT_CELL into X
-    mov isr, x                   ; Move to ISR
-    set x, MID_CELL_MARGIN       ; Load MID_CELL_MARGIN into X
-    mov y, isr                   ; Move BIT_CELL to y
-    sub y, x                     ; Calculate lower bound (y = y - x)
-    mov isr, y                   ; Store lower bound in ISR
+    set isr, BIT_CELL            ; Load BIT_CELL into ISR
+    jmp x!=isr, check_bit_zero   ; If not close to BIT_CELL, check if it's a bit boundary
     
-    ; Compare y with lower bound
-    mov x, y                     ; Copy y to x for comparison
-    mov y, isr                   ; Move lower_bound to y
-    sub x, y                     ; x = x - y (x = original_y - lower_bound)
-    jmp !x, mid_cell_check_upper ; If y == lower_bound, check upper bound
-    jmp x, mid_cell_check_upper  ; If y > lower_bound, check upper bound
-    jmp not_mid_cell             ; If y < lower_bound, not a mid-cell transition
-    
-mid_cell_check_upper:
-    set x, BIT_CELL              ; Load BIT_CELL into X
-    mov isr, x                   ; Move to ISR
-    set x, MID_CELL_MARGIN       ; Load MID_CELL_MARGIN into X
-    mov y, isr                   ; Move BIT_CELL to y
-    add y, x                     ; Calculate upper bound (y = y + x)
-    mov isr, y                   ; Store upper bound in ISR
-    
-    ; Compare y with upper bound
-    mov x, isr                   ; Copy upper_bound to x for comparison
-    mov y, osr                   ; Restore original y value
-    sub x, y                     ; x = x - y (x = upper_bound - original_y)
-    jmp !x, mid_cell_transition  ; If y == upper_bound, it's a mid-cell transition
-    jmp x, mid_cell_transition   ; If y < upper_bound, it's a mid-cell transition
-    jmp not_mid_cell             ; If y > upper_bound, not a mid-cell transition
-    
-mid_cell_transition:
     ; This is a mid-cell transition, so bit is 1
-    ; Shift in a 1 bit
-    mov x, 1                     ; Set x to 1 for shifting in
-    in x, 1                      ; Shift in a 1 bit
-    
-    ; Get the next bit boundary transition
-    pull                         ; Pull timestamp from FIFO
-    mov isr, y                   ; Store previous timestamp in ISR
-    mov y, osr                   ; Store new timestamp in Y
-    
+    in y, 1                      ; Shift in a 1 bit
+    pull                         ; Pull timestamp for next bit boundary
     jmp bit_counter              ; Continue to bit counter
     
-not_mid_cell:
-    ; No mid-cell transition, so bit is 0
-    ; Shift in a 0 bit
-    mov x, 0                     ; Set x to 0 for shifting in
-    in x, 1                      ; Shift in a 0 bit
+check_bit_zero:
+    ; Check if this is a bit boundary (indicating a 0)
+    set isr, BIT_PERIOD          ; Load BIT_PERIOD into ISR
+    jmp x!=isr, wait_for_start   ; If not close to BIT_PERIOD, something's wrong, restart
+    
+    ; This is a bit boundary, so bit is 0
+    in null, 1                   ; Shift in a 0 bit
     
 bit_counter:
-    ; Decrement bit counter and check if we're done
-    jmp y--, bit_loop_check      ; Decrement bit counter
-bit_loop_check:
-    jmp !y, bit_loop_done        ; If counter is 0, we're done
-    jmp bit_loop                 ; Otherwise continue loop
+    jmp y--, bit_loop            ; Decrement bit counter and continue if not zero
     
-bit_loop_done:
     ; We've decoded 8 data bits, now check parity bit
     ; Get next transition
     pull                         ; Pull timestamp from FIFO
-    mov isr, y                   ; Store previous timestamp in ISR
-    mov y, osr                   ; Store new timestamp in Y
+    mov isr, osr                 ; Store timestamp in ISR
+    pull                         ; Pull next timestamp from FIFO
+    mov x, osr                   ; Store timestamp in X
     
-    mov x, y                     ; Store current timestamp in x
-    mov y, isr                   ; Move previous timestamp to y
-    sub x, y                     ; Calculate time difference (x = x - y)
-    mov y, x                     ; Store result in y
+    ; Calculate time difference
+    sub x, x, isr                ; x = x - isr (time difference)
     
     ; Check if this is a mid-cell transition (indicating a 1 parity bit)
-    set x, BIT_CELL              ; Load BIT_CELL into X
-    mov isr, x                   ; Move to ISR
-    set x, MID_CELL_MARGIN       ; Load MID_CELL_MARGIN into X
-    mov y, isr                   ; Move BIT_CELL to y
-    sub y, x                     ; Calculate lower bound (y = y - x)
-    mov isr, y                   ; Store lower bound in ISR
+    set isr, BIT_CELL            ; Load BIT_CELL into ISR
+    jmp x!=isr, parity_bit_zero  ; If not close to BIT_CELL, parity bit is 0
     
-    ; Compare y with lower bound
-    mov x, y                     ; Copy y to x for comparison
-    mov y, isr                   ; Move lower_bound to y
-    sub x, y                     ; x = x - y (x = original_y - lower_bound)
-    jmp !x, parity_check_upper   ; If y == lower_bound, check upper bound
-    jmp x, parity_check_upper    ; If y > lower_bound, check upper bound
-    jmp parity_bit_zero          ; If y < lower_bound, parity bit is 0
-    
-parity_check_upper:
-    set x, BIT_CELL              ; Load BIT_CELL into X
-    mov isr, x                   ; Move to ISR
-    set x, MID_CELL_MARGIN       ; Load MID_CELL_MARGIN into X
-    mov y, isr                   ; Move BIT_CELL to y
-    add y, x                     ; Calculate upper bound (y = y + x)
-    mov isr, y                   ; Store upper bound in ISR
-    
-    ; Compare y with upper bound
-    mov x, isr                   ; Copy upper_bound to x for comparison
-    mov y, osr                   ; Restore original y value
-    sub x, y                     ; x = x - y (x = upper_bound - original_y)
-    jmp !x, parity_bit_one       ; If y == upper_bound, parity bit is 1
-    jmp x, parity_bit_one        ; If y < upper_bound, parity bit is 1
-    jmp parity_bit_zero          ; If y > upper_bound, parity bit is 0
-    
-parity_bit_one:
     ; Parity bit is 1
-    mov isr, 1                   ; Store parity bit in ISR
+    set x, 1                     ; Set parity bit to 1
+    pull                         ; Pull timestamp for next bit boundary
     jmp check_parity
     
 parity_bit_zero:
     ; Parity bit is 0
-    mov isr, 0                   ; Store parity bit in ISR
+    set x, 0                     ; Set parity bit to 0
     
 check_parity:
-    ; Calculate expected parity (odd parity)
-    in null, 24                  ; Shift ISR right to make room for data byte
-    mov y, isr                   ; Copy data byte to Y for parity calculation
-    mov x, 0                     ; Initialize parity counter
-parity_calc_loop:
-    jmp !y, skip_parity_calc     ; Skip if bit is 0
-    jmp !x, set_parity_one       ; If parity is 0, set to 1
-    mov x, 0                     ; Otherwise set parity to 0
-    jmp next_parity_calc_bit
-set_parity_one:
-    mov x, 1                     ; Set parity to 1
-next_parity_calc_bit:
-    jmp y--, parity_shift        ; Decrement bit counter
-parity_shift:
-    mov y, isr                   ; Reload data byte
-    in y, 1                      ; Shift right by 1
-    mov isr, y                   ; Store back to ISR
-    jmp !y, skip_parity_calc     ; If no more bits, we're done
-    jmp parity_calc_loop         ; Otherwise continue
-skip_parity_calc:
+    ; Skip the two guaranteed '1's (we don't need to verify them)
+    pull                         ; Pull timestamp for first '1' bit boundary
+    pull                         ; Pull timestamp for first '1' mid-cell
+    pull                         ; Pull timestamp for second '1' bit boundary
+    pull                         ; Pull timestamp for second '1' mid-cell
     
-    ; At this point, X contains the expected parity bit (1 for odd parity)
-    ; Compare with actual parity bit in ISR
-    mov y, isr                   ; Get actual parity bit
-    jmp x!=y, parity_error       ; If parity doesn't match, discard byte
-    
-    ; Skip the two guaranteed '1's
-    ; First '1'
-    pull                         ; Pull timestamp for bit boundary transition
-    pull                         ; Pull timestamp for mid-cell transition (should be there for a '1')
-    
-    ; Second '1'
-    pull                         ; Pull timestamp for bit boundary transition
-    pull                         ; Pull timestamp for mid-cell transition (should be there for a '1')
-    
-    ; We have a valid byte with correct parity, push it to the output FIFO
-    in null, 24                  ; Shift ISR right to make room for data byte
-    mov x, isr                   ; Move decoded byte to X
+    ; We have a valid byte, push it to the output FIFO
+    mov isr, y                   ; Move decoded byte to ISR
     push                         ; Push byte to output FIFO
-    
-    ; Ready for next byte
-    jmp wait_for_start
-    
-parity_error:
-    ; Parity error, discard this byte and skip the two '1's
-    ; First '1'
-    pull                         ; Pull timestamp for bit boundary transition
-    pull                         ; Pull timestamp for mid-cell transition
-    
-    ; Second '1'
-    pull                         ; Pull timestamp for bit boundary transition
-    pull                         ; Pull timestamp for mid-cell transition
     
     ; Ready for next byte
     jmp wait_for_start
