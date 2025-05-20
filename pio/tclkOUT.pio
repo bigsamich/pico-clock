@@ -14,7 +14,7 @@
 ; Initialize bit counter to track bit position within a byte
 ; This helps maintain alignment and prevent clock shifting
 .wrap_target
-    set y, 0                     ; Initialize bit counter (0-11 for 12 bits in TCLK frame)
+    set pins, 0                  ; Initialize bit counter (0-11 for 12 bits in TCLK frame)
     
 bit_loop:
     pull                         ; Pull timestamp from FIFO
@@ -22,13 +22,15 @@ bit_loop:
     
     ; Wait until the specified timestamp
 wait_loop:
-    jmp x!=y, wait_loop          ; Compare with system time (Y is preloaded)
+    mov isr, x                   ; Copy timestamp to ISR for comparison
+    mov y, pins                  ; Get current pin state for comparison
+    jmp x!=y, wait_loop          ; Compare with system time (pins is preloaded)
     
     ; Toggle the output pin
     set pins, 1                  ; Set the output pin high
     
     ; Increment bit counter
-    jmp !y, check_bit_boundary   ; If y is 0, this is a bit boundary
+    jmp !pins, check_bit_boundary ; If pins is 0, this is a bit boundary
     
     ; This is a mid-cell transition (only happens for '1' bits)
     ; No need to increment bit counter here
@@ -37,7 +39,7 @@ wait_loop:
 check_bit_boundary:
     ; This is a bit boundary transition
     ; Increment bit counter
-    mov y, 0                     ; Reset bit position flag
+    set pins, 0                  ; Reset bit position flag
     
 pull_next:
     pull                         ; Pull next timestamp from FIFO
@@ -45,6 +47,8 @@ pull_next:
     
     ; Wait until the specified timestamp
 wait_loop2:
+    mov isr, x                   ; Copy timestamp to ISR for comparison
+    mov y, pins                  ; Get current pin state for comparison
     jmp x!=y, wait_loop2         ; Compare with system time
     
     ; Toggle the output pin
@@ -52,7 +56,7 @@ wait_loop2:
     
     ; Check if we've completed a full TCLK frame (12 bits)
     ; If so, reset the bit counter
-    mov y, 0                     ; Reset bit position flag for next bit
+    set pins, 0                  ; Reset bit position flag for next bit
     jmp bit_loop                 ; Continue with next bit
 .wrap
 
