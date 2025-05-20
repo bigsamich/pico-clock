@@ -24,13 +24,15 @@ bit_loop:
 wait_loop:
     mov isr, x                   ; Copy timestamp to ISR for comparison
     mov y, pins                  ; Get current pin state for comparison
+    mov x, isr                   ; Move timestamp back to x
     jmp x!=y, wait_loop          ; Compare with system time (pins is preloaded)
     
     ; Toggle the output pin
     set pins, 1                  ; Set the output pin high
     
     ; Increment bit counter
-    jmp !pins, check_bit_boundary ; If pins is 0, this is a bit boundary
+    mov x, pins                  ; Move pins to x
+    jmp !x, check_bit_boundary   ; If pins is 0, this is a bit boundary
     
     ; This is a mid-cell transition (only happens for '1' bits)
     ; No need to increment bit counter here
@@ -49,6 +51,7 @@ pull_next:
 wait_loop2:
     mov isr, x                   ; Copy timestamp to ISR for comparison
     mov y, pins                  ; Get current pin state for comparison
+    mov x, isr                   ; Move timestamp back to x
     jmp x!=y, wait_loop2         ; Compare with system time
     
     ; Toggle the output pin
