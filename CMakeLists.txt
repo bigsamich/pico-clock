@@ -25,6 +25,16 @@ set(PIO_FILES
     ${CMAKE_CURRENT_LIST_DIR}/pio/mdatOUT.pio
 )
 
+# Add include directories
+include_directories(${CMAKE_CURRENT_LIST_DIR}/include)
+
+# Add source files
+add_executable(${PROJECT_NAME}
+    src/main.cpp
+    src/tclk.c
+    # src/mdat.c is excluded from build but kept in the project
+)
+
 # Generate PIO headers for TCLK
 pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/tclkIN.pio)
 pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/tclkDecode.pio)
@@ -36,16 +46,6 @@ pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/mdatIN.pi
 pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/mdatDecode.pio)
 pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/mdatEncode.pio)
 pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/mdatOUT.pio)
-
-# Add include directories
-include_directories(${CMAKE_CURRENT_LIST_DIR}/include)
-
-# Add source files
-add_executable(${PROJECT_NAME}
-    src/main.cpp
-    src/tclk.c
-    # src/mdat.c is excluded from build but kept in the project
-)
 
 # Link libraries
 target_link_libraries(${PROJECT_NAME}
