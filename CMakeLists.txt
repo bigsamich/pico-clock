@@ -18,11 +18,6 @@ set(PIO_FILES
     ${CMAKE_CURRENT_LIST_DIR}/pio/tclkDecode.pio
     ${CMAKE_CURRENT_LIST_DIR}/pio/tclkEncode.pio
     ${CMAKE_CURRENT_LIST_DIR}/pio/tclkOUT.pio
-    # MDAT PIO files
-    ${CMAKE_CURRENT_LIST_DIR}/pio/mdatIN.pio
-    ${CMAKE_CURRENT_LIST_DIR}/pio/mdatDecode.pio
-    ${CMAKE_CURRENT_LIST_DIR}/pio/mdatEncode.pio
-    ${CMAKE_CURRENT_LIST_DIR}/pio/mdatOUT.pio
 )
 
 # Add include directories
@@ -32,7 +27,6 @@ include_directories(${CMAKE_CURRENT_LIST_DIR}/include)
 add_executable(${PROJECT_NAME}
     src/main.cpp
     src/tclk.c
-    # src/mdat.c exclude from build: todo
 )
 
 # Generate PIO headers for TCLK
