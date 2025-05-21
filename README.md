@@ -79,7 +79,7 @@ pico-clock/
 2. **Run the Docker container and build the project**:
 
    ```bash
-   docker run --rm -v $(pwd):/app pico-clock-builder /app/scripts/build.sh
+   docker run --rm -v $(pwd):/app/project pico-clock-builder /app/scripts/build.sh
    ```
 
    This will create the build artifacts in the `build` directory, including `pico-clock.uf2` which can be flashed to the Raspberry Pi Pico.

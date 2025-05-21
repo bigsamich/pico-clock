@@ -26,7 +26,7 @@ include_directories(${CMAKE_CURRENT_LIST_DIR}/include)
 # Add source files
 add_executable(${PROJECT_NAME}
     src/main.cpp
-    src/tclk.c
+    src/tclk.cpp
 )
 
 # Generate PIO headers for TCLK

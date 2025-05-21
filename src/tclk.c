@@ -20,6 +20,12 @@
 #include "tclkDecode.pio.h"
 #include "tclkEncode.pio.h"
 #include "tclkOUT.pio.h"
+#include <stdio.h>
+
+// Forward declarations for static functions
+static bool encode_and_send_bits(tclk_t* tclk, uint8_t byte);
+static bool receive_bits_and_assemble(tclk_t* tclk, uint8_t* byte, bool check_parity);
+static bool check_sync_status(tclk_t* tclk, uint32_t timeout_ms);
 
 // TCLK protocol constants
 #define TCLK_START_BIT 0         // Start bit is always 0
