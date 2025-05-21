@@ -305,11 +305,48 @@ static bool encode_and_send_bits(tclk_t* tclk, uint8_t byte) {
     return true;
 }
 
+// Helper function to check if the input is active and synchronized
+static bool check_sync_status(tclk_t* tclk, uint32_t timeout_ms) {
+    if (!tclk || !tclk->is_running) return false;
+    
+    // Check if we can receive valid data within the timeout period
+    absolute_time_t end_time = make_timeout_time_ms(timeout_ms);
+    
+    while (!time_reached(end_time)) {
+        // Try to receive a byte with parity checking
+        uint8_t dummy_byte;
+        if (receive_bits_and_assemble(tclk, &dummy_byte, true)) {
+            // Successfully received a valid byte, we're synchronized
+            return true;
+        }
+        
+        // Give a small delay to avoid tight loop
+        sleep_ms(1);
+    }
+    
+    // Timeout reached without receiving valid data
+    return false;
+}
+
 bool tclk_receive_byte(tclk_t* tclk, uint8_t* byte) {
     if (!tclk || !tclk->is_running || !byte) return false;
     
-    // Receive a byte from the tclkDecode state machine with parity checking
-    return receive_bits_and_assemble(tclk, byte, true);
+    // Try to receive a byte with parity checking
+    bool result = receive_bits_and_assemble(tclk, byte, true);
+    
+    // If we couldn't receive a byte, check if we need to re-synchronize
+    if (!result && tclk->is_running) {
+        // Check if we've lost synchronization (no valid data for 100ms)
+        if (!check_sync_status(tclk, 100)) {
+            printf("TCLK synchronization lost. Attempting to re-synchronize...\n");
+            // Try to re-synchronize
+            tclk_synchronize(tclk);
+            // Try to receive a byte again after re-synchronization
+            result = receive_bits_and_assemble(tclk, byte, true);
+        }
+    }
+    
+    return result;
 }
 
 // Define the TCLK pattern to look for during synchronization
@@ -325,12 +362,17 @@ bool tclk_synchronize(tclk_t* tclk) {
     
     // Variables to track synchronization
     bool synchronized = false;
-    bool bit_buffer[BIT_BUFFER_SIZE]; // Buffer to store bits for pattern matching
-    size_t bit_count = 0;
+    uint16_t bit_frame = 0; // Use a 16-bit integer to store the last 16 bits (more than enough for our 12-bit frame)
     
     // Clear any existing data in the FIFOs
     pio_sm_clear_fifos(tclk->pio, tclk->sm_in);
     pio_sm_clear_fifos(tclk->pio, tclk->sm_decode);
+    
+    // Bit masks for checking frame components
+    const uint16_t START_BIT_MASK = 0x0800;    // Bit 11 (0-indexed) - should be 0
+    const uint16_t DATA_BITS_MASK = 0x07F8;    // Bits 3-10 - 8 data bits
+    const uint16_t PARITY_BIT_MASK = 0x0004;   // Bit 2 - parity bit
+    const uint16_t TRAILER_BITS_MASK = 0x0003; // Bits 0-1 - should be 1 (0x3)
     
     // Try to find a valid TCLK pattern (will continue indefinitely)
     while (!synchronized) {
@@ -342,33 +384,34 @@ bool tclk_synchronize(tclk_t* tclk) {
             continue;
         }
         
-        // Add the bit to our buffer
-        if (bit_count < BIT_BUFFER_SIZE) {
-            bit_buffer[bit_count++] = bit;
-        } else {
-            // Shift the buffer to make room for the new bit
-            for (size_t i = 0; i < BIT_BUFFER_SIZE - 1; i++) {
-                bit_buffer[i] = bit_buffer[i + 1];
-            }
-            bit_buffer[BIT_BUFFER_SIZE - 1] = bit;
-        }
+        // Shift the frame left by 1 and add the new bit at the end
+        bit_frame = (bit_frame << 1) | (bit ? 1 : 0);
         
-        // Check for the pattern: 0 (start bit) followed by two 1s (end of previous byte)
-        // This is a simplified pattern that should be enough to synchronize
-        if (bit_count >= 3) {
-            size_t pattern_start = bit_count - 3;
-            if (bit_buffer[pattern_start] == TCLK_START_BIT && 
-                bit_buffer[pattern_start + 1] == true && 
-                bit_buffer[pattern_start + 2] == true) {
+        // Check for a complete TCLK frame (12 bits)
+        // - Start bit (0) at bit position 11
+        // - 8 data bits (any value) at bit positions 3-10
+        // - Parity bit (odd parity) at bit position 2
+        // - 2 guaranteed '1's at bit positions 0-1
+        
+        // First, check if we have a valid frame structure:
+        // 1. Start bit should be 0
+        // 2. Trailer bits should be 1
+        if (((bit_frame & START_BIT_MASK) == 0) && ((bit_frame & TRAILER_BITS_MASK) == TRAILER_BITS_MASK)) {
+            // Extract the data byte (bits 3-10)
+            uint8_t data_byte = (bit_frame & DATA_BITS_MASK) >> 3;
+            
+            // Check parity bit
+            bool parity_bit = (bit_frame & PARITY_BIT_MASK) != 0;
+            bool expected_parity = calculate_odd_parity(data_byte);
+            
+            if (parity_bit == expected_parity) {
+                // We found a valid TCLK frame!
                 synchronized = true;
-                printf("TCLK synchronized successfully\n");
+                printf("TCLK synchronized successfully (found valid frame with data 0x%02X)\n", data_byte);
                 break;
             }
         }
     }
-    
-    // We should never reach here unless synchronized is true
-    printf("TCLK synchronized successfully\n");
     
     return synchronized;
 }
@@ -384,6 +427,23 @@ size_t tclk_receive_bytes(tclk_t* tclk, uint8_t* buffer, size_t max_length, uint
     for (size_t i = 0; i < max_length; i++) {
         if (!receive_bits_and_assemble(tclk, &buffer[i], true)) {
             // No more data available or error
+            
+            // If we haven't received any bytes yet, check if we need to re-synchronize
+            if (bytes_received == 0 && tclk->is_running) {
+                // Check if we've lost synchronization (no valid data for 100ms)
+                if (!check_sync_status(tclk, 100)) {
+                    printf("TCLK synchronization lost. Attempting to re-synchronize...\n");
+                    // Try to re-synchronize
+                    tclk_synchronize(tclk);
+                    // Try to receive this byte again after re-synchronization
+                    if (receive_bits_and_assemble(tclk, &buffer[i], true)) {
+                        bytes_received++;
+                        continue; // Continue to the next byte
+                    }
+                }
+            }
+            
+            // If we still can't receive data, break out of the loop
             break;
         }
         bytes_received++;
