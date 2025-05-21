@@ -1,16 +1,14 @@
 ;
 ; TclkDecode PIO program for Raspberry Pi Pico
 ; 
-; This PIO program processes timestamps from tclkIN and decodes
-; data according to the TCLK protocol as described in TCLK_Paper.pdf:
-; - Uses bi-phase (modified Manchester) coding
+; This PIO program processes timestamps from tclkIN and converts them to bits.
+; It only handles the conversion from timestamps to bits, without performing
+; any protocol-specific operations like synchronization or parity checking.
+; Those operations are handled in the tclk.c file.
+;
+; Bit detection logic:
 ; - Transition at each bit cell boundary
 ; - Additional transition at mid-cell if bit is 1, no transition if bit is 0
-; - Word length is 12 bits:
-;   * 1 start bit (always 0)
-;   * 8 data bits
-;   * 1 parity bit (odd parity)
-;   * 2 guaranteed '1's after each event
 ;
 
 .program tclkDecode
@@ -21,11 +19,11 @@
 .define BIT_CELL_MAX (BIT_CELL + MID_CELL_MARGIN)
 
 .wrap_target
-    ; Wait for a start bit (0)
-wait_for_start:
-    pull                         ; Pull timestamp from FIFO
+    ; Process timestamps and convert to bits
+process_timestamps:
+    pull                         ; Pull first timestamp from FIFO
     mov x, osr                   ; Store timestamp in X
-    pull                         ; Pull next timestamp from FIFO
+    pull                         ; Pull second timestamp from FIFO
     mov y, osr                   ; Store timestamp in Y
     
     ; Calculate time difference
@@ -34,81 +32,29 @@ wait_for_start:
     mov x, isr                   ; Move original y to x
     sub x, x, y                  ; Calculate time difference (x = x - y)
     
-    ; Check if this could be a start bit (0)
-    ; For a start bit, we expect no mid-cell transition, so time difference should be BIT_PERIOD
-    set y, BIT_PERIOD            ; Load BIT_PERIOD into Y
-    jmp x!=y, wait_for_start     ; If not close to BIT_PERIOD, not a start bit
-    
-    ; We found a start bit (0), now decode the 8 data bits
-    set x, 0                     ; X will hold our decoded byte
-    set y, 8                     ; Set bit counter to 8
-    
-bit_loop:
-    ; Get next transition
-    pull                         ; Pull timestamp from FIFO
-    mov isr, osr                 ; Store timestamp in ISR
-    pull                         ; Pull next timestamp from FIFO
-    mov x, osr                   ; Store timestamp in X
-    
-    ; Calculate time difference
-    sub x, x, isr                ; x = x - isr (time difference)
-    
-    ; Check if this is a mid-cell transition (indicating a 1)
-    set isr, BIT_CELL            ; Load BIT_CELL into ISR
-    jmp x!=isr, check_bit_zero   ; If not close to BIT_CELL, check if it's a bit boundary
+    ; Determine if this is a bit cell or bit boundary transition
+    set y, BIT_CELL              ; Load BIT_CELL into Y
+    jmp x!=y, check_bit_boundary ; If not close to BIT_CELL, check if it's a bit boundary
     
     ; This is a mid-cell transition, so bit is 1
-    in y, 1                      ; Shift in a 1 bit
-    pull                         ; Pull timestamp for next bit boundary
-    jmp bit_counter              ; Continue to bit counter
+    set x, 1                     ; Set bit value to 1
+    jmp output_bit
     
-check_bit_zero:
-    ; Check if this is a bit boundary (indicating a 0)
-    set isr, BIT_PERIOD          ; Load BIT_PERIOD into ISR
-    jmp x!=isr, wait_for_start   ; If not close to BIT_PERIOD, something's wrong, restart
+check_bit_boundary:
+    ; Check if this is a bit boundary
+    set y, BIT_PERIOD            ; Load BIT_PERIOD into Y
+    jmp x!=y, process_timestamps ; If not close to BIT_PERIOD, something's wrong, restart
     
     ; This is a bit boundary, so bit is 0
-    in null, 1                   ; Shift in a 0 bit
+    set x, 0                     ; Set bit value to 0
     
-bit_counter:
-    jmp y--, bit_loop            ; Decrement bit counter and continue if not zero
+output_bit:
+    ; Output the bit (0 or 1)
+    mov isr, x                   ; Move bit value to ISR
+    push                         ; Push bit to output FIFO
     
-    ; We've decoded 8 data bits, now check parity bit
-    ; Get next transition
-    pull                         ; Pull timestamp from FIFO
-    mov isr, osr                 ; Store timestamp in ISR
-    pull                         ; Pull next timestamp from FIFO
-    mov x, osr                   ; Store timestamp in X
-    
-    ; Calculate time difference
-    sub x, x, isr                ; x = x - isr (time difference)
-    
-    ; Check if this is a mid-cell transition (indicating a 1 parity bit)
-    set isr, BIT_CELL            ; Load BIT_CELL into ISR
-    jmp x!=isr, parity_bit_zero  ; If not close to BIT_CELL, parity bit is 0
-    
-    ; Parity bit is 1
-    set x, 1                     ; Set parity bit to 1
-    pull                         ; Pull timestamp for next bit boundary
-    jmp check_parity
-    
-parity_bit_zero:
-    ; Parity bit is 0
-    set x, 0                     ; Set parity bit to 0
-    
-check_parity:
-    ; Skip the two guaranteed '1's (we don't need to verify them)
-    pull                         ; Pull timestamp for first '1' bit boundary
-    pull                         ; Pull timestamp for first '1' mid-cell
-    pull                         ; Pull timestamp for second '1' bit boundary
-    pull                         ; Pull timestamp for second '1' mid-cell
-    
-    ; We have a valid byte, push it to the output FIFO
-    mov isr, y                   ; Move decoded byte to ISR
-    push                         ; Push byte to output FIFO
-    
-    ; Ready for next byte
-    jmp wait_for_start
+    ; Continue processing timestamps
+    jmp process_timestamps
 .wrap
 
 % c-sdk {
@@ -123,32 +69,33 @@ static inline void tclkDecode_program_init(PIO pio, uint sm, uint offset) {
     pio_sm_set_enabled(pio, sm, true);
 }
 
-// Function to read a decoded byte from the PIO FIFO
-static inline bool tclkDecode_get_byte(PIO pio, uint sm, uint8_t* byte) {
+// Function to read a decoded bit from the PIO FIFO
+static inline bool tclkDecode_get_bit(PIO pio, uint sm, bool* bit) {
     // Check if there's data available
     if (pio_sm_is_rx_fifo_empty(pio, sm)) {
         return false;
     }
     
-    // Read the byte
-    *byte = pio_sm_get(pio, sm) & 0xFF;
+    // Read the bit
+    uint32_t value = pio_sm_get(pio, sm);
+    *bit = (value & 0x01) != 0;
     return true;
 }
 
-// Function to read multiple decoded bytes
-static inline size_t tclkDecode_get_bytes(PIO pio, uint sm, uint8_t* buffer, size_t max_bytes) {
-    size_t bytes_read = 0;
+// Function to read multiple decoded bits into a buffer
+static inline size_t tclkDecode_get_bits(PIO pio, uint sm, bool* buffer, size_t max_bits) {
+    size_t bits_read = 0;
     
-    while (bytes_read < max_bytes) {
-        uint8_t byte;
-        if (!tclkDecode_get_byte(pio, sm, &byte)) {
+    while (bits_read < max_bits) {
+        bool bit;
+        if (!tclkDecode_get_bit(pio, sm, &bit)) {
             // No more data available
             break;
         }
         
-        buffer[bytes_read++] = byte;
+        buffer[bits_read++] = bit;
     }
     
-    return bytes_read;
+    return bits_read;
 }
 %}

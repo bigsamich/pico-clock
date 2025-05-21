@@ -1,6 +1,13 @@
 /**
  * @file tclk.c
  * @brief Implementation of TCLK protocol using Raspberry Pi Pico PIO
+ * 
+ * This implementation separates the responsibilities:
+ * - tclkIN.pio: Handles timestamps for input signals
+ * - tclkDecode.pio: Converts timestamps to bits
+ * - tclkEncode.pio: Converts bits to timestamps
+ * - tclkOUT.pio: Outputs timestamps as signals
+ * - tclk.c (this file): Handles protocol-specific operations like synchronization and parity checking
  */
 
 #include "tclk.h"
@@ -13,6 +20,27 @@
 #include "tclkDecode.pio.h"
 #include "tclkEncode.pio.h"
 #include "tclkOUT.pio.h"
+
+// TCLK protocol constants
+#define TCLK_START_BIT 0         // Start bit is always 0
+#define TCLK_DATA_BITS 8         // 8 data bits
+#define TCLK_PARITY_BITS 1       // 1 parity bit (odd parity)
+#define TCLK_TRAILER_BITS 2      // 2 trailer bits (always 1)
+#define TCLK_FRAME_BITS (TCLK_DATA_BITS + TCLK_PARITY_BITS + TCLK_TRAILER_BITS + 1) // Total bits in a frame
+
+// Buffer sizes
+#define BIT_BUFFER_SIZE 256      // Size of the bit buffer
+
+// Helper function to calculate odd parity for a byte
+static bool calculate_odd_parity(uint8_t byte) {
+    uint8_t parity = 0;
+    for (int i = 0; i < 8; i++) {
+        if (byte & (1 << i)) {
+            parity ^= 1;
+        }
+    }
+    return parity;
+}
 
 bool tclk_init(tclk_t* tclk, PIO pio_instance, uint clock_in_pin, uint clock_out_pin) {
     if (!tclk) return false;
@@ -159,24 +187,129 @@ void tclk_stop(tclk_t* tclk) {
 bool tclk_send_byte(tclk_t* tclk, uint8_t byte) {
     if (!tclk || !tclk->is_running) return false;
     
-    // Send the byte to the tclkEncode state machine
-    tclkEncode_send_byte(tclk->pio, tclk->sm_encode, byte);
-    return true;
+    // Encode the byte into bits and send them to the PIO
+    return encode_and_send_bits(tclk, byte);
 }
 
 size_t tclk_send_bytes(tclk_t* tclk, const uint8_t* buffer, size_t length) {
     if (!tclk || !tclk->is_running || !buffer || length == 0) return 0;
     
-    // Send the bytes to the tclkEncode state machine
-    tclkEncode_send_bytes(tclk->pio, tclk->sm_encode, buffer, length);
-    return length;
+    // Send each byte individually
+    size_t bytes_sent = 0;
+    for (size_t i = 0; i < length; i++) {
+        if (encode_and_send_bits(tclk, buffer[i])) {
+            bytes_sent++;
+        } else {
+            // Error sending byte
+            break;
+        }
+    }
+    
+    return bytes_sent;
+}
+
+// Helper function to receive bits from the PIO and assemble them into a byte
+static bool receive_bits_and_assemble(tclk_t* tclk, uint8_t* byte, bool check_parity) {
+    if (!tclk || !tclk->is_running || !byte) return false;
+    
+    bool bit_buffer[TCLK_FRAME_BITS];
+    size_t bits_received = 0;
+    uint8_t assembled_byte = 0;
+    bool parity_bit = false;
+    
+    // Wait for a start bit (0)
+    while (true) {
+        bool bit;
+        if (!tclkDecode_get_bit(tclk->pio, tclk->sm_decode, &bit)) {
+            // No data available
+            return false;
+        }
+        
+        if (bit == TCLK_START_BIT) {
+            // Found start bit, break and continue to data bits
+            break;
+        }
+    }
+    
+    // Read 8 data bits
+    for (int i = 0; i < TCLK_DATA_BITS; i++) {
+        bool bit;
+        if (!tclkDecode_get_bit(tclk->pio, tclk->sm_decode, &bit)) {
+            // Not enough data available
+            return false;
+        }
+        
+        // Assemble the byte (LSB first)
+        if (bit) {
+            assembled_byte |= (1 << i);
+        }
+    }
+    
+    // Read parity bit
+    if (!tclkDecode_get_bit(tclk->pio, tclk->sm_decode, &parity_bit)) {
+        // Not enough data available
+        return false;
+    }
+    
+    // Check parity if requested
+    if (check_parity) {
+        bool expected_parity = calculate_odd_parity(assembled_byte);
+        if (parity_bit != expected_parity) {
+            // Parity error
+            return false;
+        }
+    }
+    
+    // Skip the two trailer bits (should be 1's)
+    bool trailer_bit1, trailer_bit2;
+    if (!tclkDecode_get_bit(tclk->pio, tclk->sm_decode, &trailer_bit1) ||
+        !tclkDecode_get_bit(tclk->pio, tclk->sm_decode, &trailer_bit2)) {
+        // Not enough data available
+        return false;
+    }
+    
+    // Check trailer bits if requested
+    if (check_parity && (!trailer_bit1 || !trailer_bit2)) {
+        // Invalid trailer bits
+        return false;
+    }
+    
+    // Return the assembled byte
+    *byte = assembled_byte;
+    return true;
+}
+
+// Helper function to encode a byte into bits and send them to the PIO
+static bool encode_and_send_bits(tclk_t* tclk, uint8_t byte) {
+    if (!tclk || !tclk->is_running) return false;
+    
+    // Calculate parity bit (odd parity)
+    bool parity_bit = calculate_odd_parity(byte);
+    
+    // Send start bit (always 0)
+    tclkEncode_send_bit(tclk->pio, tclk->sm_encode, TCLK_START_BIT);
+    
+    // Send 8 data bits (LSB first)
+    for (int i = 0; i < TCLK_DATA_BITS; i++) {
+        bool bit = (byte & (1 << i)) != 0;
+        tclkEncode_send_bit(tclk->pio, tclk->sm_encode, bit);
+    }
+    
+    // Send parity bit
+    tclkEncode_send_bit(tclk->pio, tclk->sm_encode, parity_bit);
+    
+    // Send 2 trailer bits (always 1)
+    tclkEncode_send_bit(tclk->pio, tclk->sm_encode, true);
+    tclkEncode_send_bit(tclk->pio, tclk->sm_encode, true);
+    
+    return true;
 }
 
 bool tclk_receive_byte(tclk_t* tclk, uint8_t* byte) {
     if (!tclk || !tclk->is_running || !byte) return false;
     
-    // Receive a byte from the tclkDecode state machine
-    return tclkDecode_get_byte(tclk->pio, tclk->sm_decode, byte);
+    // Receive a byte from the tclkDecode state machine with parity checking
+    return receive_bits_and_assemble(tclk, byte, true);
 }
 
 // Define the TCLK pattern to look for during synchronization
@@ -192,7 +325,7 @@ bool tclk_synchronize(tclk_t* tclk) {
     
     // Variables to track synchronization
     bool synchronized = false;
-    uint8_t bit_buffer[32]; // Buffer to store bits for pattern matching
+    bool bit_buffer[BIT_BUFFER_SIZE]; // Buffer to store bits for pattern matching
     size_t bit_count = 0;
     
     // Clear any existing data in the FIFOs
@@ -203,34 +336,30 @@ bool tclk_synchronize(tclk_t* tclk) {
     while (!synchronized) {
         // Read a bit from the PIO
         bool bit;
-        if (pio_sm_is_rx_fifo_empty(tclk->pio, tclk->sm_decode)) {
+        if (!tclkDecode_get_bit(tclk->pio, tclk->sm_decode, &bit)) {
             // No data available, wait a bit
             sleep_ms(1);
             continue;
         }
         
-        // Get a bit from the FIFO
-        uint32_t data = pio_sm_get(tclk->pio, tclk->sm_decode);
-        bit = (data & 0x01) != 0;
-        
         // Add the bit to our buffer
-        if (bit_count < sizeof(bit_buffer)) {
-            bit_buffer[bit_count++] = bit ? 1 : 0;
+        if (bit_count < BIT_BUFFER_SIZE) {
+            bit_buffer[bit_count++] = bit;
         } else {
             // Shift the buffer to make room for the new bit
-            for (size_t i = 0; i < sizeof(bit_buffer) - 1; i++) {
+            for (size_t i = 0; i < BIT_BUFFER_SIZE - 1; i++) {
                 bit_buffer[i] = bit_buffer[i + 1];
             }
-            bit_buffer[sizeof(bit_buffer) - 1] = bit ? 1 : 0;
+            bit_buffer[BIT_BUFFER_SIZE - 1] = bit;
         }
         
         // Check for the pattern: 0 (start bit) followed by two 1s (end of previous byte)
         // This is a simplified pattern that should be enough to synchronize
         if (bit_count >= 3) {
             size_t pattern_start = bit_count - 3;
-            if (bit_buffer[pattern_start] == 0 && 
-                bit_buffer[pattern_start + 1] == 1 && 
-                bit_buffer[pattern_start + 2] == 1) {
+            if (bit_buffer[pattern_start] == TCLK_START_BIT && 
+                bit_buffer[pattern_start + 1] == true && 
+                bit_buffer[pattern_start + 2] == true) {
                 synchronized = true;
                 printf("TCLK synchronized successfully\n");
                 break;
@@ -249,9 +378,16 @@ size_t tclk_receive_bytes(tclk_t* tclk, uint8_t* buffer, size_t max_length, uint
     
     // Get the current timestamp before receiving bytes
     uint64_t current_time = time_us_64();
+    size_t bytes_received = 0;
     
-    // Receive bytes from the tclkDecode state machine
-    size_t bytes_received = tclkDecode_get_bytes(tclk->pio, tclk->sm_decode, buffer, max_length);
+    // Receive bytes one at a time with parity checking
+    for (size_t i = 0; i < max_length; i++) {
+        if (!receive_bits_and_assemble(tclk, &buffer[i], true)) {
+            // No more data available or error
+            break;
+        }
+        bytes_received++;
+    }
     
     // If requested, store the timestamp of the last bit
     if (last_bit_timestamp != NULL && bytes_received > 0) {
@@ -320,13 +456,23 @@ bool tclk_run_test_loop(tclk_t* tclk) {
     
     // Send the 0x1F byte repeatedly at 15 Hz (approximately every 67 ms)
     while (!time_reached(end_time)) {
-        // Send the test byte (0x1F)
-        tclk_send_byte(tclk, 0x1F);
+        // Send the test byte (0x1F) using our bit-level encoding function
+        encode_and_send_bits(tclk, 0x1F);
         
         // Check for received bytes
-        size_t bytes_received = tclk_receive_bytes(tclk, rx_buffer, sizeof(rx_buffer), &last_bit_timestamp);
+        size_t bytes_received = 0;
+        for (size_t i = 0; i < sizeof(rx_buffer); i++) {
+            if (!receive_bits_and_assemble(tclk, &rx_buffer[i], true)) {
+                // No more data available or error
+                break;
+            }
+            bytes_received++;
+        }
         
         if (bytes_received > 0) {
+            // Get current timestamp
+            last_bit_timestamp = time_us_64();
+            
             // Print the received bytes in the simplified JSON format
             for (size_t i = 0; i < bytes_received; i++) {
                 printf("{\"tclk_event\":%d, \"time\":%llu}\n", 

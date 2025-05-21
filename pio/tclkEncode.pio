@@ -1,66 +1,36 @@
 ;
 ; TclkEncode PIO program for Raspberry Pi Pico
 ; 
-; This PIO program encodes data using the TCLK protocol as described in TCLK_Paper.pdf:
-; - Uses bi-phase (modified Manchester) coding
+; This PIO program converts bits to timestamps for the TCLK protocol.
+; It only handles the conversion from bits to timestamps, without performing
+; any protocol-specific operations like adding start bits, parity bits, or trailer bits.
+; Those operations are handled in the tclk.c file.
+;
+; Bit encoding logic:
 ; - Transition at each bit cell boundary
 ; - Additional transition at mid-cell if bit is 1, no transition if bit is 0
-; - Word length is 12 bits:
-;   * 1 start bit (always 0)
-;   * 8 data bits
-;   * 1 parity bit (odd parity)
-;   * 2 guaranteed '1's after each event
 ;
-; The encoded data is output as timestamps for the tclkOUT program.
+; The encoded timestamps are output for the tclkOUT program.
 ;
 
 .program tclkEncode
 .define PUBLIC BIT_CELL 50       ; Bit cell duration in nanoseconds (half of bit period)
 .define PUBLIC BIT_PERIOD 100    ; Full bit period in nanoseconds
-.define PUBLIC TCLK_FRAME_BITS 12 ; Total bits in a TCLK frame (1 start + 8 data + 1 parity + 2 trailer)
-.define PARITY_BIT 0x100         ; Bit position for parity storage
 
 .wrap_target
-    pull                         ; Pull a byte from FIFO
-    mov x, osr                   ; Store byte in X
-    
-    ; Calculate parity bit (odd parity)
-    mov y, x                     ; Copy byte to Y for parity calculation
-    set x, 0                     ; Initialize parity counter in X
-parity_loop:
-    jmp !y, skip_parity_count    ; Skip if bit is 0
-    jmp !x, set_parity_one       ; If parity is 0, set to 1
-    set x, 0                     ; Otherwise set parity to 0
-    jmp next_parity_bit
-set_parity_one:
-    set x, 1                     ; Set parity to 1
-next_parity_bit:
-    mov isr, y                   ; Copy y to ISR for shifting
-    in isr, 1                    ; Shift right by 1
-    mov y, isr                   ; Store back to y
-    jmp y, parity_loop           ; Continue until all bits processed
-skip_parity_count:
-    mov isr, x                   ; Store parity bit in ISR
+    pull                         ; Pull a bit from FIFO
+    mov x, osr                   ; Store bit in X
     
     ; Get current timestamp
     set y, 0                     ; Start with timestamp 0 (relative timing)
     
-    ; Send start bit (always 0)
+    ; Push timestamp for bit boundary transition
     push                         ; Push timestamp for bit boundary transition
-    set x, BIT_PERIOD            ; Load BIT_PERIOD into X
-    add x, y                     ; Add full bit period
-    mov y, x                     ; Store result back in y
-    push                         ; Push timestamp for next bit boundary transition
     
-    ; Send 8 data bits (LSB first)
-    set x, 8                     ; Set bit counter to 8
-    mov osr, null                ; Clear OSR
-bit_loop:
-    out osr, 1                   ; Shift out 1 bit from OSR to get next data bit
-    jmp !osr, send_zero          ; If bit is 0, jump to send_zero
+    ; Check if bit is 0 or 1
+    jmp !x, send_zero            ; If bit is 0, jump to send_zero
     
     ; Send a 1 bit (transition at bit boundary and mid-cell)
-    push                         ; Push timestamp for bit boundary transition
     set x, BIT_CELL              ; Load BIT_CELL into X
     add x, y                     ; Add half bit period for mid-cell transition
     mov y, x                     ; Store result back in y
@@ -71,55 +41,12 @@ bit_loop:
     
 send_zero:
     ; Send a 0 bit (transition at bit boundary only)
-    push                         ; Push timestamp for bit boundary transition
     set x, BIT_PERIOD            ; Load BIT_PERIOD into X
     add x, y                     ; Add full bit period (no mid-cell transition)
     mov y, x                     ; Store result back in y
     
 next_bit:
-    jmp x--, bit_loop            ; Decrement bit counter and continue if not zero
-    
-    ; Send parity bit
-    mov x, isr                   ; Retrieve parity bit from ISR
-    jmp !x, send_parity_zero     ; If parity bit is 0, jump to send_parity_zero
-    
-    ; Send a 1 parity bit
-    push                         ; Push timestamp for bit boundary transition
-    set x, BIT_CELL              ; Load BIT_CELL into X
-    add x, y                     ; Add half bit period for mid-cell transition
-    mov y, x                     ; Store result back in y
-    push                         ; Push timestamp for mid-cell transition
-    add x, y                     ; Add half bit period to complete the bit
-    mov y, x                     ; Store result back in y
-    jmp send_trailer
-    
-send_parity_zero:
-    ; Send a 0 parity bit
-    push                         ; Push timestamp for bit boundary transition
-    set x, BIT_PERIOD            ; Load BIT_PERIOD into X
-    add x, y                     ; Add full bit period (no mid-cell transition)
-    mov y, x                     ; Store result back in y
-    
-send_trailer:
-    ; Send 2 guaranteed '1's (bits 11-12 of the TCLK frame)
-    ; First '1' (bit 11)
-    push                         ; Push timestamp for bit boundary transition
-    set x, BIT_CELL              ; Load BIT_CELL into X
-    add x, y                     ; Add half bit period for mid-cell transition
-    mov y, x                     ; Store result back in y
-    push                         ; Push timestamp for mid-cell transition
-    add x, y                     ; Add half bit period to complete the bit
-    mov y, x                     ; Store result back in y
-    
-    ; Second '1' (bit 12 - completes the TCLK frame)
-    push                         ; Push timestamp for bit boundary transition
-    set x, BIT_CELL              ; Load BIT_CELL into X
-    add x, y                     ; Add half bit period for mid-cell transition
-    mov y, x                     ; Store result back in y
-    push                         ; Push timestamp for mid-cell transition
-    add x, y                     ; Add half bit period to complete the bit
-    mov y, x                     ; Store result back in y
-    push                         ; Push final timestamp
+    push                         ; Push timestamp for next bit boundary
 .wrap
 
 % c-sdk {
@@ -134,20 +61,20 @@ static inline void tclkEncode_program_init(PIO pio, uint sm, uint offset) {
     pio_sm_set_enabled(pio, sm, true);
 }
 
-// Function to send a byte to be encoded as a TCLK event
-static inline void tclkEncode_send_byte(PIO pio, uint sm, uint8_t byte) {
+// Function to send a single bit to be encoded as timestamps
+static inline void tclkEncode_send_bit(PIO pio, uint sm, bool bit) {
     // Wait for space in the FIFO
     while (pio_sm_is_tx_fifo_full(pio, sm))
         tight_loop_contents();
     
-    // Send the byte
-    pio_sm_put(pio, sm, byte);
+    // Send the bit
+    pio_sm_put(pio, sm, bit ? 1 : 0);
 }
 
-// Function to send multiple bytes to be encoded as TCLK events
-static inline void tclkEncode_send_bytes(PIO pio, uint sm, const uint8_t* buffer, size_t length) {
+// Function to send multiple bits to be encoded as timestamps
+static inline void tclkEncode_send_bits(PIO pio, uint sm, const bool* buffer, size_t length) {
     for (size_t i = 0; i < length; i++) {
-        tclkEncode_send_byte(pio, sm, buffer[i]);
+        tclkEncode_send_bit(pio, sm, buffer[i]);
     }
 }
 %}
