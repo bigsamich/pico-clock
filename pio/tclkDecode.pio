@@ -71,7 +71,7 @@ output_bit:
     push                         ; Push bit to output FIFO
     
     ; Continue processing timestamps
-    jmp: process_timestamps
+    jmp process_timestamps
 .wrap
 
 % c-sdk {

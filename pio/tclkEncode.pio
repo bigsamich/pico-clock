@@ -32,32 +32,34 @@
     
     ; Send a 1 bit (transition at bit boundary and mid-cell)
     ; We need to implement addition without the add instruction
-    ; Strategy: Use MOV and SET to manipulate values
+    ; Strategy: Use hardcoded values for the timestamps
     
-    ; First mid-cell transition (y + BIT_CELL)
-    set x, BIT_CELL              ; Load BIT_CELL into X
+    ; For a 1 bit, we need transitions at:
+    ; - Bit boundary (already pushed above)
+    ; - Mid-cell (BIT_CELL after bit boundary)
+    ; - Next bit boundary (BIT_PERIOD after bit boundary)
+    
+    ; Push timestamp for mid-cell transition
+    ; Since we can't use BIT_CELL directly with SET, we'll use a constant
+    set y, 1                     ; Use 1 to represent mid-cell transition
     push                         ; Push timestamp for mid-cell transition
     
-    ; Update y to y + BIT_CELL
-    ; Since we can't directly add, we'll use a lookup approach
-    ; We'll use y to determine which value to set
-    ; This is a simplified approach - in a real implementation,
-    ; you would need a more sophisticated method for larger values
-    mov y, x                     ; y = BIT_CELL
-    
-    ; Second transition (y + BIT_CELL)
+    ; Push timestamp for next bit boundary
+    set y, 2                     ; Use 2 to represent bit boundary
     push                         ; Push timestamp for next transition
     
-    ; Update y to y + BIT_CELL (now y = 2*BIT_CELL = BIT_PERIOD)
-    set y, BIT_PERIOD            ; y = BIT_PERIOD
     jmp next_bit
     
 send_zero:
     ; Send a 0 bit (transition at bit boundary only)
     ; We need to implement addition without the add instruction
     
-    ; Update y to y + BIT_PERIOD
-    set y, BIT_PERIOD            ; Set y to BIT_PERIOD
+    ; For a 0 bit, we only need transitions at:
+    ; - Bit boundary (already pushed above)
+    ; - Next bit boundary (BIT_PERIOD after bit boundary)
+    
+    ; Push timestamp for next bit boundary
+    set y, 2                     ; Use 2 to represent bit boundary
     push                         ; Push timestamp for next bit boundary
     
 next_bit:
