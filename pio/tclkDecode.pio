@@ -50,7 +50,7 @@ process_timestamps:
     
     ; For demonstration, we'll use a simplified check
     ; In a real implementation, you would need a more sophisticated pattern recognition
-    set y, BIT_CELL              ; Load expected pattern for mid-cell transition
+    set y, 1                     ; Use 1 to represent mid-cell transition
     jmp x!=y, check_bit_boundary ; If not matching mid-cell pattern, check bit boundary
     
     ; This is a mid-cell transition, so bit is 1
@@ -59,7 +59,7 @@ process_timestamps:
     
 check_bit_boundary:
     ; Check if this is a bit boundary transition (bit = 0)
-    set y, BIT_PERIOD            ; Load expected pattern for bit boundary
+    set y, 2                     ; Use 2 to represent bit boundary
     jmp x!=y, process_timestamps ; If not matching bit boundary pattern, restart
     
     ; This is a bit boundary, so bit is 0
