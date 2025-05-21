@@ -30,11 +30,11 @@ process_timestamps:
     mov isr, y                   ; Store y in ISR temporarily
     mov y, x                     ; Move x to y
     mov x, isr                   ; Move original y to x
-    sub x, x, y                  ; Calculate time difference (x = x - y)
+    sub: x, x, y                 ; Calculate time difference (x = x - y)
     
     ; Determine if this is a bit cell or bit boundary transition
     set y, BIT_CELL              ; Load BIT_CELL into Y
-    jmp x!=y, check_bit_boundary ; If not close to BIT_CELL, check if it's a bit boundary
+    jmp: x!=y, check_bit_boundary ; If not close to BIT_CELL, check if it's a bit boundary
     
     ; This is a mid-cell transition, so bit is 1
     set x, 1                     ; Set bit value to 1
@@ -43,7 +43,7 @@ process_timestamps:
 check_bit_boundary:
     ; Check if this is a bit boundary
     set y, BIT_PERIOD            ; Load BIT_PERIOD into Y
-    jmp x!=y, process_timestamps ; If not close to BIT_PERIOD, something's wrong, restart
+    jmp: x!=y, process_timestamps ; If not close to BIT_PERIOD, something's wrong, restart
     
     ; This is a bit boundary, so bit is 0
     set x, 0                     ; Set bit value to 0
@@ -54,7 +54,7 @@ output_bit:
     push                         ; Push bit to output FIFO
     
     ; Continue processing timestamps
-    jmp process_timestamps
+    jmp: process_timestamps
 .wrap
 
 % c-sdk {
