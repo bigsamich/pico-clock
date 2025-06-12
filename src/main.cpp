@@ -31,7 +31,21 @@ static volatile bool running = true;
 
 int main() {
     // Initialize stdio
+    // Initialize stdio
     stdio_init_all();
+    gpio_init(PICO_DEFAULT_LED_PIN);
+    gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+    // 5 second loop with a starting message every second
+    for (int i = 1; i <= 5; ++i) {
+        printf("Starting in %d...\n", 6 - i);
+        //Flash the LED to indicate startup for 1 second off and on at 20Hz
+        for (int j = 0; j < 20; ++j) {
+            gpio_put(PICO_DEFAULT_LED_PIN, true);
+            sleep_ms(25); // On for 25ms
+            gpio_put(PICO_DEFAULT_LED_PIN, false);
+            sleep_ms(25); // Off for 25ms
+        }
+    }
     
     printf("Raspberry Pi Pico Clock Protocol Implementation\n");
     printf("--------------------------------------------\n");
@@ -85,7 +99,7 @@ int main() {
 void core1_entry() {
     printf("Data processing started on core 1\n");
     
-    uint8_t rx_buffer[BUFFER_SIZE]; // Buffer for received bytes
+    uint8_t rx_ffer[BUFFER_SIZE]; // Buffer for received bytes
     
     while (running) {
         // Read received bytes with timestamp from TCLK

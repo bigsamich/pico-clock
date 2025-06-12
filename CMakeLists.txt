@@ -26,6 +26,11 @@ add_executable(${PROJECT_NAME}
     src/tclk.cpp
 )
 
+# Add LED and serial test program
+add_executable(test_led_serial
+    src/test_led_serial.cpp
+)
+
 # Generate PIO header for TCLK
 pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/tclk.pio)
 
@@ -38,12 +43,23 @@ target_link_libraries(${PROJECT_NAME}
     pico_multicore
 )
 
+# Link libraries for test program
+target_link_libraries(test_led_serial
+    pico_stdlib
+    hardware_gpio
+)
+
 # Enable USB output, disable UART output
 pico_enable_stdio_usb(${PROJECT_NAME} 1)
 pico_enable_stdio_uart(${PROJECT_NAME} 0)
 
+# Enable USB output for test program
+pico_enable_stdio_usb(test_led_serial 1)
+pico_enable_stdio_uart(test_led_serial 0)
+
 # Create map/bin/hex/uf2 files
 pico_add_extra_outputs(${PROJECT_NAME})
+pico_add_extra_outputs(test_led_serial)
 
 # Add a custom target to flash the Pico
 add_custom_target(flash
