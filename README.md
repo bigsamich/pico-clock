@@ -1,6 +1,6 @@
-# Raspberry Pi Pico TCLK/MDAT Protocol Implementation (pico-clock)
+# Raspberry Pi Pico TCLK Protocol Implementation (pico-clock)
 
-This project implements the TCLK (Tevatron Clock) and MDAT (Machine Data) protocols for the Raspberry Pi Pico using the Programmable Input/Output (PIO) feature. It captures and timestamps input signals with a resolution of 50ns and implements the bi-phase (modified Manchester) encoding for TCLK and the 28-bit frame structure for MDAT as described in the TCLK_Paper.pdf.
+This project implements the TCLK (Tevatron Clock) protocol for the Raspberry Pi Pico using the Programmable Input/Output (PIO) feature. It captures and timestamps input signals with a resolution of 50ns and implements the bi-phase (modified Manchester) encoding for TCLK as described in the TCLK_Paper.pdf.
 
 ## Features
 
@@ -13,22 +13,11 @@ This project implements the TCLK (Tevatron Clock) and MDAT (Machine Data) protoc
     * 8 data bits
     * 1 parity bit (odd parity)
     * 2 guaranteed '1's after each event
-- **MDAT Protocol Implementation**: A companion protocol for machine data transmission
-  - 28-bit frame length
-  - Self-clocking at 10 MBit/s
-  - Frame is always 2.75 microseconds in length
-  - Parity ensures consistent frame length
 - **PIO-based Implementation**:
-  - **TCLK Components**:
-    * **tclkIN**: Listens to an input clock signal and timestamps transitions with a resolution of 50ns
-    * **tclkDecode**: Processes the timestamps and decodes data according to the TCLK protocol
-    * **tclkEncode**: Encodes data according to the TCLK protocol and generates timestamps
-    * **tclkOUT**: Generates an output clock signal based on the encoded timestamps
-  - **MDAT Components**:
-    * **mdatIN**: Captures input signal transitions and generates timestamps
-    * **mdatDecode**: Processes timestamps and decodes data according to the MDAT protocol
-    * **mdatEncode**: Encodes data according to the MDAT protocol and generates timestamps
-    * **mdatOUT**: Generates output signals based on the encoded timestamps
+  - **tclkIN**: Listens to an input clock signal and timestamps transitions with a resolution of 50ns
+  - **tclkDecode**: Processes the timestamps and decodes data according to the TCLK protocol
+  - **tclkEncode**: Encodes data according to the TCLK protocol and generates timestamps
+  - **tclkOUT**: Generates an output clock signal based on the encoded timestamps
 - **Docker-based Build Environment**: Encapsulates the entire build environment for easy setup and reproducibility
 - **Multi-core Processing**: Uses both cores of the Raspberry Pi Pico for efficient processing
 
@@ -39,24 +28,18 @@ pico-clock/
 ├── cmake/                  # CMake modules
 │   └── pico_sdk_import.cmake
 ├── include/                # Header files
-│   ├── tclk.h              # TCLK protocol header
-│   └── mdat.h              # MDAT protocol header
+│   └── tclk.h              # TCLK protocol header
 ├── pio/                    # PIO programs
 │   ├── tclkIN.pio          # TCLK input program
 │   ├── tclkDecode.pio      # TCLK decoding program
 │   ├── tclkEncode.pio      # TCLK encoding program
-│   ├── tclkOUT.pio         # TCLK output program
-│   ├── mdatIN.pio          # MDAT input program
-│   ├── mdatDecode.pio      # MDAT decoding program
-│   ├── mdatEncode.pio      # MDAT encoding program
-│   └── mdatOUT.pio         # MDAT output program
+│   └── tclkOUT.pio         # TCLK output program
 ├── scripts/                # Build and flash scripts
 │   ├── build.sh
 │   └── flash.sh
 ├── src/                    # Source files
 │   ├── main.cpp            # Main application
-│   ├── tclk.c              # TCLK implementation
-│   └── mdat.c              # MDAT implementation
+│   └── tclk.cpp            # TCLK implementation
 ├── build/                  # Build artifacts (generated)
 ├── CMakeLists.txt          # CMake configuration
 ├── Dockerfile              # Docker configuration
@@ -120,10 +103,6 @@ pico-clock/
 1. Connect a TCLK signal source to GPIO pin 16 (default) of the Raspberry Pi Pico.
 2. Connect a TCLK signal output device to GPIO pin 17 (default) of the Raspberry Pi Pico.
 
-### MDAT Connections
-1. Connect an MDAT signal source to GPIO pin 25 (default) of the Raspberry Pi Pico.
-2. Connect an MDAT signal output device to GPIO pin 24 (default) of the Raspberry Pi Pico.
-
 ### General Setup
 1. Connect the Pico to your computer via USB for power and debugging output.
 2. For testing, you can jumper the output pins to the corresponding input pins to create a loopback.
@@ -152,36 +131,14 @@ The TCLK protocol is a 10 MHz serial signal that uses bi-phase (modified Manches
 
 This implementation follows the protocol as described in the Fermilab paper "Time and Data Distribution Systems at the Fermilab Accelerator" by David G. Beechy and Robert J. Ducar.
 
-## MDAT Protocol Details
-
-The MDAT (Machine Data) protocol is a companion to the TCLK protocol, used for transmitting machine status data:
-
-1. **Frame Structure**:
-   - 28-bit frame length
-   - Self-clocking at 10 MBit/s
-   - Frame is always 2.75 microseconds in length
-   - Parity ensures consistent frame length
-
-2. **Implementation**:
-   - **mdatIN**: Captures input signal transitions and generates timestamps
-   - **mdatDecode**: Processes timestamps and decodes data according to the MDAT protocol
-   - **mdatEncode**: Encodes data according to the MDAT protocol and generates timestamps
-   - **mdatOUT**: Generates output signals based on the encoded timestamps
-
-3. **Integration with TCLK**:
-   - MDAT and TCLK work together to provide a complete timing and data distribution system
-   - TCLK provides timing events while MDAT provides machine status data
-   - Both protocols can be used independently or together depending on requirements
 
 ## Customization
 
 ### Pin Configuration
 - To change the TCLK input/output pins, modify the `TCLK_INPUT_PIN` and `TCLK_OUTPUT_PIN` definitions in `src/main.cpp`.
-- To change the MDAT input/output pins, modify the `MDAT_INPUT_PIN` and `MDAT_OUTPUT_PIN` definitions in `src/main.cpp`.
 
 ### Protocol Parameters
 - To adjust the TCLK timestamp resolution or transition threshold, modify the constants in the TCLK PIO programs.
-- To adjust the MDAT frame parameters, modify the constants in the MDAT PIO programs.
 
 ## Debugging
 

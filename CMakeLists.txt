@@ -13,11 +13,8 @@ pico_sdk_init()
 
 # Add PIO files
 set(PIO_FILES
-    # TCLK PIO files
-    ${CMAKE_CURRENT_LIST_DIR}/pio/tclkIN.pio
-    ${CMAKE_CURRENT_LIST_DIR}/pio/tclkDecode.pio
-    ${CMAKE_CURRENT_LIST_DIR}/pio/tclkEncode.pio
-    ${CMAKE_CURRENT_LIST_DIR}/pio/tclkOUT.pio
+    # TCLK PIO file
+    ${CMAKE_CURRENT_LIST_DIR}/pio/tclk.pio
 )
 
 # Add include directories
@@ -29,11 +26,8 @@ add_executable(${PROJECT_NAME}
     src/tclk.cpp
 )
 
-# Generate PIO headers for TCLK
-pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/tclkIN.pio)
-pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/tclkDecode.pio)
-pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/tclkEncode.pio)
-pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/tclkOUT.pio)
+# Generate PIO header for TCLK
+pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/tclk.pio)
 
 # Link libraries
 target_link_libraries(${PROJECT_NAME}

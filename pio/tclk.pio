@@ -1,0 +1,185 @@
+;
+; TCLK PIO program for Raspberry Pi Pico
+; 
+; This PIO program implements the TCLK protocol using differential Manchester encoding.
+; Based on the TCLK protocol specification:
+; - A transition occurs at each bit cell boundary (every 100ns)
+; - An additional transition occurs at mid-cell (50ns) if the bit is 1
+; - No additional transition occurs if the bit is 0
+;
+; This implementation is based on the Raspberry Pi Pico differential Manchester example.
+;
+
+.program tclk_tx
+.side_set 1 opt
+
+; Transmit one bit every 16 cycles. In each bit period:
+; - A '0' is encoded as a transition at the start of the bit period only
+; - A '1' is encoded as a transition at the start AND in the middle
+;
+; When idle, the line should be high with transitions at mid-cell (all 1s)
+; Side-set bit 0 must be mapped to the data output pin.
+; Autopull must be enabled.
+
+; Initialize to idle state (high with transitions at mid-cell)
+public idle:
+    nop             side 1 [7]   ; Set line high
+    nop             side 0 [7]   ; Transition at mid-cell
+    jmp idle                     ; Loop in idle state until data is available
+
+public start:
+    ; Pull data from FIFO
+    pull                         ; Pull data from FIFO
+    
+    ; Process bits
+bit_loop:
+    out x, 1                     ; Get next bit from OSR
+    jmp !x, send_zero side 1 [1] ; If bit is 0, jump to send_zero
+    
+    ; Send a 1 bit (transition at both bit boundary and mid-cell)
+    nop             side 0 [6]   ; First part of delay
+    nop             side 1 [6]   ; Transition at mid-cell
+    jmp bit_check                ; Check if we need to pull more data
+    
+send_zero:
+    ; Send a 0 bit (transition at bit boundary only, stable at mid-cell)
+    ; Split the delay into multiple instructions to stay within the limit of 7
+    nop             side 1 [7]   ; First part of delay
+    nop             side 1 [7]   ; Second part of delay
+    
+bit_check:
+    ; Check if we need to pull more data
+    jmp !osre, bit_loop          ; If OSR not empty, process next bit
+    
+    ; OSR is empty, go back to idle state
+    jmp idle                     ; Return to idle state
+
+% c-sdk {
+static inline void tclk_tx_program_init(PIO pio, uint sm, uint offset, uint pin, float div) {
+    pio_sm_set_pins_with_mask(pio, sm, 0, 1u << pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
+    pio_gpio_init(pio, pin);
+
+    pio_sm_config c = tclk_tx_program_get_default_config(offset);
+    sm_config_set_sideset_pins(&c, pin);
+    sm_config_set_out_shift(&c, true, true, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    sm_config_set_clkdiv(&c, div);
+    
+    // Initialize at the idle label to start in idle state (all 1s)
+    pio_sm_init(pio, sm, offset + tclk_tx_offset_idle, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+// Function to send a single bit
+static inline void tclk_tx_send_bit(PIO pio, uint sm, bool bit) {
+    // Wait for space in the FIFO
+    while (pio_sm_is_tx_fifo_full(pio, sm))
+        tight_loop_contents();
+    
+    // Jump to start label to begin transmission
+    pio_sm_exec(pio, sm, pio_encode_jmp(pio_sm_get_pc(pio, sm) - 
+                                        (pio_sm_get_pc(pio, sm) - tclk_tx_offset_start)));
+    
+    // Send the bit
+    pio_sm_put(pio, sm, bit ? 1 : 0);
+}
+
+// Function to send a byte (LSB first)
+static inline void tclk_tx_send_byte(PIO pio, uint sm, uint8_t byte) {
+    for (int i = 0; i < 8; i++) {
+        tclk_tx_send_bit(pio, sm, (byte >> i) & 1);
+    }
+}
+%}
+
+.program tclk_rx
+
+; Assumes line is idle high with transitions at center (all 1s)
+; One bit is 16 cycles. In each bit period:
+; - A '0' is encoded as a transition at time 0 only
+; - A '1' is encoded as a transition at time 0 and a transition at time T/2
+;
+; The IN mapping and the JMP pin select must both be mapped to the GPIO used for
+; RX data. Autopush must be enabled.
+
+public start:
+    ; Wait for a valid start bit (0) which is a transition at the bit boundary
+    ; but no transition at mid-cell
+wait_for_start:
+    wait 1 pin, 0       ; Wait for rising edge (bit boundary)
+    nop         [11]    ; Delay to mid-cell point
+    jmp pin, wait_for_start ; If transition at mid-cell, it's a 1 (idle), keep waiting
+    
+    ; Found a valid start bit (0), now we can start decoding
+    in y, 1             ; Shift in a 0 bit (start bit)
+    
+.wrap_target
+next_bit:
+    ; Wait for transition at bit boundary
+    wait 1 pin, 0 [1]   ; Wait for rising edge at bit boundary
+    wait 0 pin, 0 [1]   ; Wait for falling edge at bit boundary
+    
+    ; Delay to mid-cell point
+    nop         [11]    ; Delay to mid-cell point
+    
+    ; Check for transition at mid-cell
+    jmp pin, bit_is_one ; If transition at mid-cell, it's a 1
+    
+    ; No transition at mid-cell, so bit is 0
+    in y, 1             ; Shift in a 0 bit
+    jmp next_bit
+    
+bit_is_one:
+    ; Transition detected at mid-cell, so bit is 1
+    in x, 1             ; Shift in a 1 bit
+    jmp next_bit
+.wrap
+
+% c-sdk {
+static inline void tclk_rx_program_init(PIO pio, uint sm, uint offset, uint pin, float div) {
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, false);
+    pio_gpio_init(pio, pin);
+
+    pio_sm_config c = tclk_rx_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, pin); // for WAIT
+    sm_config_set_jmp_pin(&c, pin); // for JMP
+    sm_config_set_in_shift(&c, true, true, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+    sm_config_set_clkdiv(&c, div);
+    pio_sm_init(pio, sm, offset, &c);
+
+    // X and Y are set to 0 and 1, to conveniently emit these to ISR/FIFO.
+    pio_sm_exec(pio, sm, pio_encode_set(pio_x, 1));
+    pio_sm_exec(pio, sm, pio_encode_set(pio_y, 0));
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+// Function to read a bit from the PIO FIFO
+static inline bool tclk_rx_get_bit(PIO pio, uint sm, bool* bit) {
+    // Check if there's data available
+    if (pio_sm_is_rx_fifo_empty(pio, sm)) {
+        return false;
+    }
+    
+    // Read the bit
+    uint32_t value = pio_sm_get(pio, sm);
+    *bit = (value & 0x01) != 0;
+    return true;
+}
+
+// Function to read a byte (LSB first)
+static inline bool tclk_rx_get_byte(PIO pio, uint sm, uint8_t* byte) {
+    *byte = 0;
+    for (int i = 0; i < 8; i++) {
+        bool bit;
+        if (!tclk_rx_get_bit(pio, sm, &bit)) {
+            return false;
+        }
+        if (bit) {
+            *byte |= (1 << i);
+        }
+    }
+    return true;
+}
+%}

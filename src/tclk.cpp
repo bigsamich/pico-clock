@@ -2,11 +2,8 @@
  * @file tclk.cpp
  * @brief Implementation of TCLK protocol using Raspberry Pi Pico PIO
  * 
- * This implementation separates the responsibilities:
- * - tclkIN.pio: Handles timestamps for input signals
- * - tclkDecode.pio: Converts timestamps to bits
- * - tclkEncode.pio: Converts bits to timestamps
- * - tclkOUT.pio: Outputs timestamps as signals
+ * This implementation uses a simplified approach with differential Manchester encoding:
+ * - tclk.pio: Contains both transmit and receive programs in a single file
  * - tclk.cpp (this file): Handles protocol-specific operations like synchronization and parity checking
  */
 
@@ -15,11 +12,8 @@
 #include "hardware/irq.h"
 #include "hardware/sync.h"
 
-// Include the PIO program headers (will be generated during build)
-#include "tclkIN.pio.h"
-#include "tclkDecode.pio.h"
-#include "tclkEncode.pio.h"
-#include "tclkOUT.pio.h"
+// Include the PIO program header (will be generated during build)
+#include "tclk.pio.h"
 #include <stdio.h>
 
 // Forward declarations for static functions
@@ -58,67 +52,43 @@ bool tclk_init(tclk_t* tclk, PIO pio_instance, uint clock_in_pin, uint clock_out
     tclk->is_running = false;
     
     // Claim state machines
-    tclk->sm_in = pio_claim_unused_sm(tclk->pio, true);
-    if (tclk->sm_in == -1) return false;
+    tclk->sm_tx = pio_claim_unused_sm(tclk->pio, true);
+    if (tclk->sm_tx == -1) return false;
     
-    tclk->sm_decode = pio_claim_unused_sm(tclk->pio, true);
-    if (tclk->sm_decode == -1) {
-        pio_sm_unclaim(tclk->pio, tclk->sm_in);
-        return false;
-    }
-    
-    tclk->sm_encode = pio_claim_unused_sm(tclk->pio, true);
-    if (tclk->sm_encode == -1) {
-        pio_sm_unclaim(tclk->pio, tclk->sm_in);
-        pio_sm_unclaim(tclk->pio, tclk->sm_decode);
-        return false;
-    }
-    
-    tclk->sm_out = pio_claim_unused_sm(tclk->pio, true);
-    if (tclk->sm_out == -1) {
-        pio_sm_unclaim(tclk->pio, tclk->sm_in);
-        pio_sm_unclaim(tclk->pio, tclk->sm_decode);
-        pio_sm_unclaim(tclk->pio, tclk->sm_encode);
+    tclk->sm_rx = pio_claim_unused_sm(tclk->pio, true);
+    if (tclk->sm_rx == -1) {
+        pio_sm_unclaim(tclk->pio, tclk->sm_tx);
         return false;
     }
     
     // Claim DMA channels
     tclk->dma_channel_in = dma_claim_unused_channel(true);
     if (tclk->dma_channel_in == -1) {
-        pio_sm_unclaim(tclk->pio, tclk->sm_in);
-        pio_sm_unclaim(tclk->pio, tclk->sm_decode);
-        pio_sm_unclaim(tclk->pio, tclk->sm_encode);
-        pio_sm_unclaim(tclk->pio, tclk->sm_out);
+        pio_sm_unclaim(tclk->pio, tclk->sm_tx);
+        pio_sm_unclaim(tclk->pio, tclk->sm_rx);
         return false;
     }
     
     tclk->dma_channel_out = dma_claim_unused_channel(true);
     if (tclk->dma_channel_out == -1) {
-        pio_sm_unclaim(tclk->pio, tclk->sm_in);
-        pio_sm_unclaim(tclk->pio, tclk->sm_decode);
-        pio_sm_unclaim(tclk->pio, tclk->sm_encode);
-        pio_sm_unclaim(tclk->pio, tclk->sm_out);
+        pio_sm_unclaim(tclk->pio, tclk->sm_tx);
+        pio_sm_unclaim(tclk->pio, tclk->sm_rx);
         dma_channel_unclaim(tclk->dma_channel_in);
         return false;
     }
     
     // Load PIO programs
-    tclk->offset_in = pio_add_program(tclk->pio, &tclkIN_program);
-    tclk->offset_decode = pio_add_program(tclk->pio, &tclkDecode_program);
-    tclk->offset_encode = pio_add_program(tclk->pio, &tclkEncode_program);
-    tclk->offset_out = pio_add_program(tclk->pio, &tclkOUT_program);
+    tclk->offset_tx = pio_add_program(tclk->pio, &tclk_tx_program);
+    tclk->offset_rx = pio_add_program(tclk->pio, &tclk_rx_program);
     
-    // Initialize the tclkIN program
-    tclkIN_program_init(tclk->pio, tclk->sm_in, tclk->offset_in, tclk->clock_in_pin);
+    // Calculate clock divider for 10MHz operation (assuming 125MHz system clock)
+    float clk_div = clock_get_hz(clk_sys) / (10.0f * 1000000.0f);
     
-    // Initialize the tclkDecode program
-    tclkDecode_program_init(tclk->pio, tclk->sm_decode, tclk->offset_decode);
+    // Initialize the tclk_tx program
+    tclk_tx_program_init(tclk->pio, tclk->sm_tx, tclk->offset_tx, tclk->clock_out_pin, clk_div);
     
-    // Initialize the tclkEncode program
-    tclkEncode_program_init(tclk->pio, tclk->sm_encode, tclk->offset_encode);
-    
-    // Initialize the tclkOUT program
-    tclkOUT_program_init(tclk->pio, tclk->sm_out, tclk->offset_out, tclk->clock_out_pin);
+    // Initialize the tclk_rx program
+    tclk_rx_program_init(tclk->pio, tclk->sm_rx, tclk->offset_rx, tclk->clock_in_pin, clk_div);
     
     return true;
 }
@@ -127,48 +97,15 @@ bool tclk_start(tclk_t* tclk) {
     if (!tclk || tclk->is_running) return false;
     
     // Clear any existing data in the FIFOs to ensure clean start
-    pio_sm_clear_fifos(tclk->pio, tclk->sm_in);
-    pio_sm_clear_fifos(tclk->pio, tclk->sm_decode);
-    pio_sm_clear_fifos(tclk->pio, tclk->sm_encode);
-    pio_sm_clear_fifos(tclk->pio, tclk->sm_out);
+    pio_sm_clear_fifos(tclk->pio, tclk->sm_tx);
+    pio_sm_clear_fifos(tclk->pio, tclk->sm_rx);
     
     // Enable state machines
-    pio_sm_set_enabled(tclk->pio, tclk->sm_in, true);
-    pio_sm_set_enabled(tclk->pio, tclk->sm_decode, true);
-    pio_sm_set_enabled(tclk->pio, tclk->sm_encode, true);
-    pio_sm_set_enabled(tclk->pio, tclk->sm_out, true);
+    pio_sm_set_enabled(tclk->pio, tclk->sm_tx, true);
+    pio_sm_set_enabled(tclk->pio, tclk->sm_rx, true);
     
-    // Set up DMA to transfer data from tclkIN to tclkDecode
-    dma_channel_config c_in = dma_channel_get_default_config(tclk->dma_channel_in);
-    channel_config_set_transfer_data_size(&c_in, DMA_SIZE_32);
-    channel_config_set_read_increment(&c_in, false);
-    channel_config_set_write_increment(&c_in, false);
-    channel_config_set_dreq(&c_in, pio_get_dreq(tclk->pio, tclk->sm_in, false));
-    
-    dma_channel_configure(
-        tclk->dma_channel_in,
-        &c_in,
-        &tclk->pio->txf[tclk->sm_decode],  // Write to tclkDecode TX FIFO
-        &tclk->pio->rxf[tclk->sm_in],      // Read from tclkIN RX FIFO
-        0,                                  // Transfer forever
-        true                                // Start immediately
-    );
-    
-    // Set up DMA to transfer data from tclkEncode to tclkOUT
-    dma_channel_config c_out = dma_channel_get_default_config(tclk->dma_channel_out);
-    channel_config_set_transfer_data_size(&c_out, DMA_SIZE_32);
-    channel_config_set_read_increment(&c_out, false);
-    channel_config_set_write_increment(&c_out, false);
-    channel_config_set_dreq(&c_out, pio_get_dreq(tclk->pio, tclk->sm_encode, false));
-    
-    dma_channel_configure(
-        tclk->dma_channel_out,
-        &c_out,
-        &tclk->pio->txf[tclk->sm_out],     // Write to tclkOUT TX FIFO
-        &tclk->pio->rxf[tclk->sm_encode],  // Read from tclkEncode RX FIFO
-        0,                                  // Transfer forever
-        true                                // Start immediately
-    );
+    // We'll keep the DMA channels claimed but not configured
+    // This allows us to use them for other purposes if needed in the future
     
     tclk->is_running = true;
     return true;
@@ -178,10 +115,8 @@ void tclk_stop(tclk_t* tclk) {
     if (!tclk || !tclk->is_running) return;
     
     // Disable state machines
-    pio_sm_set_enabled(tclk->pio, tclk->sm_in, false);
-    pio_sm_set_enabled(tclk->pio, tclk->sm_decode, false);
-    pio_sm_set_enabled(tclk->pio, tclk->sm_encode, false);
-    pio_sm_set_enabled(tclk->pio, tclk->sm_out, false);
+    pio_sm_set_enabled(tclk->pio, tclk->sm_tx, false);
+    pio_sm_set_enabled(tclk->pio, tclk->sm_rx, false);
     
     // Abort DMA transfers
     dma_channel_abort(tclk->dma_channel_in);
@@ -226,7 +161,7 @@ static bool receive_bits_and_assemble(tclk_t* tclk, uint8_t* byte, bool check_pa
     // Wait for a start bit (0)
     while (true) {
         bool bit;
-        if (!tclkDecode_get_bit(tclk->pio, tclk->sm_decode, &bit)) {
+        if (!tclk_rx_get_bit(tclk->pio, tclk->sm_rx, &bit)) {
             // No data available
             return false;
         }
@@ -240,7 +175,7 @@ static bool receive_bits_and_assemble(tclk_t* tclk, uint8_t* byte, bool check_pa
     // Read 8 data bits
     for (int i = 0; i < TCLK_DATA_BITS; i++) {
         bool bit;
-        if (!tclkDecode_get_bit(tclk->pio, tclk->sm_decode, &bit)) {
+        if (!tclk_rx_get_bit(tclk->pio, tclk->sm_rx, &bit)) {
             // Not enough data available
             return false;
         }
@@ -252,7 +187,7 @@ static bool receive_bits_and_assemble(tclk_t* tclk, uint8_t* byte, bool check_pa
     }
     
     // Read parity bit
-    if (!tclkDecode_get_bit(tclk->pio, tclk->sm_decode, &parity_bit)) {
+    if (!tclk_rx_get_bit(tclk->pio, tclk->sm_rx, &parity_bit)) {
         // Not enough data available
         return false;
     }
@@ -268,8 +203,8 @@ static bool receive_bits_and_assemble(tclk_t* tclk, uint8_t* byte, bool check_pa
     
     // Skip the two trailer bits (should be 1's)
     bool trailer_bit1, trailer_bit2;
-    if (!tclkDecode_get_bit(tclk->pio, tclk->sm_decode, &trailer_bit1) ||
-        !tclkDecode_get_bit(tclk->pio, tclk->sm_decode, &trailer_bit2)) {
+    if (!tclk_rx_get_bit(tclk->pio, tclk->sm_rx, &trailer_bit1) ||
+        !tclk_rx_get_bit(tclk->pio, tclk->sm_rx, &trailer_bit2)) {
         // Not enough data available
         return false;
     }
@@ -293,20 +228,20 @@ static bool encode_and_send_bits(tclk_t* tclk, uint8_t byte) {
     bool parity_bit = calculate_odd_parity(byte);
     
     // Send start bit (always 0)
-    tclkEncode_send_bit(tclk->pio, tclk->sm_encode, TCLK_START_BIT);
+    tclk_tx_send_bit(tclk->pio, tclk->sm_tx, TCLK_START_BIT);
     
     // Send 8 data bits (LSB first)
     for (int i = 0; i < TCLK_DATA_BITS; i++) {
         bool bit = (byte & (1 << i)) != 0;
-        tclkEncode_send_bit(tclk->pio, tclk->sm_encode, bit);
+        tclk_tx_send_bit(tclk->pio, tclk->sm_tx, bit);
     }
     
     // Send parity bit
-    tclkEncode_send_bit(tclk->pio, tclk->sm_encode, parity_bit);
+    tclk_tx_send_bit(tclk->pio, tclk->sm_tx, parity_bit);
     
     // Send 2 trailer bits (always 1)
-    tclkEncode_send_bit(tclk->pio, tclk->sm_encode, true);
-    tclkEncode_send_bit(tclk->pio, tclk->sm_encode, true);
+    tclk_tx_send_bit(tclk->pio, tclk->sm_tx, true);
+    tclk_tx_send_bit(tclk->pio, tclk->sm_tx, true);
     
     return true;
 }
@@ -355,11 +290,6 @@ bool tclk_receive_byte(tclk_t* tclk, uint8_t* byte) {
     return result;
 }
 
-// Define the TCLK pattern to look for during synchronization
-// TCLK uses a start bit (0), followed by 8 data bits, a parity bit, and two guaranteed '1's
-// For synchronization, we'll look for the pattern of a '0' followed by two '1's
-// This is the end of one byte and the start of the next
-
 bool tclk_synchronize(tclk_t* tclk) {
     if (!tclk || !tclk->is_running) return false;
     
@@ -371,8 +301,7 @@ bool tclk_synchronize(tclk_t* tclk) {
     uint16_t bit_frame = 0; // Use a 16-bit integer to store the last 16 bits (more than enough for our 12-bit frame)
     
     // Clear any existing data in the FIFOs
-    pio_sm_clear_fifos(tclk->pio, tclk->sm_in);
-    pio_sm_clear_fifos(tclk->pio, tclk->sm_decode);
+    pio_sm_clear_fifos(tclk->pio, tclk->sm_rx);
     
     // Bit masks for checking frame components
     const uint16_t START_BIT_MASK = 0x0800;    // Bit 11 (0-indexed) - should be 0
@@ -384,7 +313,7 @@ bool tclk_synchronize(tclk_t* tclk) {
     while (!synchronized) {
         // Read a bit from the PIO
         bool bit;
-        if (!tclkDecode_get_bit(tclk->pio, tclk->sm_decode, &bit)) {
+        if (!tclk_rx_get_bit(tclk->pio, tclk->sm_rx, &bit)) {
             // No data available, wait a bit
             sleep_ms(1);
             continue;
@@ -472,23 +401,17 @@ void tclk_deinit(tclk_t* tclk) {
     }
     
     // Free resources
-    pio_sm_unclaim(tclk->pio, tclk->sm_in);
-    pio_sm_unclaim(tclk->pio, tclk->sm_decode);
-    pio_sm_unclaim(tclk->pio, tclk->sm_encode);
-    pio_sm_unclaim(tclk->pio, tclk->sm_out);
+    pio_sm_unclaim(tclk->pio, tclk->sm_tx);
+    pio_sm_unclaim(tclk->pio, tclk->sm_rx);
     dma_channel_unclaim(tclk->dma_channel_in);
     dma_channel_unclaim(tclk->dma_channel_out);
     
     // Clear the structure
     tclk->pio = NULL;
-    tclk->sm_in = 0;
-    tclk->sm_decode = 0;
-    tclk->sm_encode = 0;
-    tclk->sm_out = 0;
-    tclk->offset_in = 0;
-    tclk->offset_decode = 0;
-    tclk->offset_encode = 0;
-    tclk->offset_out = 0;
+    tclk->sm_tx = 0;
+    tclk->sm_rx = 0;
+    tclk->offset_tx = 0;
+    tclk->offset_rx = 0;
     tclk->clock_in_pin = 0;
     tclk->clock_out_pin = 0;
     tclk->dma_channel_in = 0;
@@ -507,10 +430,8 @@ bool tclk_run_test_loop(tclk_t* tclk) {
            tclk->clock_out_pin, tclk->clock_in_pin);
     
     // Clear any existing data in the FIFOs
-    pio_sm_clear_fifos(tclk->pio, tclk->sm_in);
-    pio_sm_clear_fifos(tclk->pio, tclk->sm_decode);
-    pio_sm_clear_fifos(tclk->pio, tclk->sm_encode);
-    pio_sm_clear_fifos(tclk->pio, tclk->sm_out);
+    pio_sm_clear_fifos(tclk->pio, tclk->sm_tx);
+    pio_sm_clear_fifos(tclk->pio, tclk->sm_rx);
     
     // Buffer for received bytes
     uint8_t rx_buffer[256];

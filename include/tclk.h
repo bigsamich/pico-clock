@@ -17,14 +17,10 @@
  */
 typedef struct {
     PIO pio;                // PIO instance
-    uint sm_in;             // State machine for clockIN
-    uint sm_decode;         // State machine for clockDecode
-    uint sm_encode;         // State machine for clockEncode
-    uint sm_out;            // State machine for clockOUT
-    uint offset_in;         // Program offset for clockIN
-    uint offset_decode;     // Program offset for clockDecode
-    uint offset_encode;     // Program offset for clockEncode
-    uint offset_out;        // Program offset for clockOUT
+    uint sm_tx;             // State machine for transmit
+    uint sm_rx;             // State machine for receive
+    uint offset_tx;         // Program offset for transmit
+    uint offset_rx;         // Program offset for receive
     uint clock_in_pin;      // GPIO pin for clock input
     uint clock_out_pin;     // GPIO pin for clock output
     uint dma_channel_in;    // DMA channel for input
