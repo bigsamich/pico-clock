@@ -1,0 +1,119 @@
+;
+; Low-Frequency Signal Detector PIO Program for Raspberry Pi Pico
+; 
+; This PIO program is designed to count transitions on an input pin
+; at low frequencies (20-100Hz) by using PIO hardware.
+; It counts both rising and falling edges to calculate frequency.
+; This version uses a much slower PIO clock to avoid noise and overflows.
+;
+
+.program signal_counter
+
+; Ultra-high-frequency transition detector - optimized for counting rapid transitions
+.wrap_target
+    ; We'll use a simpler approach focused on quickly detecting changes
+    ; Store initial pin state in X
+    mov x, pins      ; X = current pin state
+    
+loop:
+    ; Check pin state immediately
+    mov y, pins      ; Y = new pin state
+    jmp x!=y, edge   ; Jump if pin state changed
+    jmp loop         ; Otherwise keep polling
+    
+edge:
+    ; We detected a change - count it and continue
+    mov x, y         ; Update our stored state
+    
+    ; Push to FIFO directly using a single instruction
+    in pins, 1       ; Push one bit to mark a transition (value doesn't matter)
+    
+    ; Go back to polling immediately with no delays
+    jmp loop
+.wrap
+
+% c-sdk {
+// C/C++ wrapper for the signal_counter PIO program
+
+#include "hardware/clocks.h"
+#include "hardware/gpio.h"
+#include <cstdio>
+
+// Initialize the signal counter PIO program
+static inline void signal_counter_program_init(PIO pio, uint sm, uint offset, uint pin) {
+    // Configure pin as input without pull-up/pull-down resistors
+    pio_gpio_init(pio, pin);
+    
+    // Configure input circuitry for high-frequency signals:
+    // 1. Disable both pull-up and pull-down resistors for clean signal detection
+    // 2. Disable the Schmitt trigger for faster response to transitions
+    // 3. Ensure input buffer is enabled for proper detection
+    gpio_set_pulls(pin, false, false);               // Disable both pull-up and pull-down
+    gpio_set_input_enabled(pin, true);               // Enable input buffer
+    gpio_set_input_hysteresis_enabled(pin, false);   // Disable Schmitt trigger for faster transition detection
+    
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, false); // Set as input
+    
+    // Get default config
+    pio_sm_config c = signal_counter_program_get_default_config(offset);
+    
+    // Configure for side-set pin (we'll use this for debugging the state machine)
+    sm_config_set_sideset_pins(&c, pin+1);  // Use the next pin for side-set
+    
+    // Configure input pin mapping
+    sm_config_set_in_pins(&c, pin);    // Base pin for IN instructions
+    sm_config_set_jmp_pin(&c, pin);    // Pin for conditional jumps
+    sm_config_set_set_pins(&c, pin, 1); // Set pins if needed
+    
+    // Configure shifting for input - use minimal autopush threshold for faster FIFO updates
+    sm_config_set_in_shift(&c, true, true, 1); // Autopush after just 1 bit for immediate feedback
+    
+    // Use full system clock to ensure we catch every transition
+    // The PIO runs at the system clock rate (125MHz) divided by this value
+    sm_config_set_clkdiv(&c, 1.0f);  // Run at full 125MHz to catch every transition
+    
+    // Initialize and enable state machine
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_clear_fifos(pio, sm);
+    pio_sm_set_enabled(pio, sm, true);
+    
+    printf("Signal counter PIO initialized on pin %d\n", pin);
+}
+
+// Function to get transition count from the PIO
+static inline uint32_t signal_counter_get_count(PIO pio, uint sm) {
+    uint32_t count = 0;
+    
+    // Read all data from the FIFO
+    while (!pio_sm_is_rx_fifo_empty(pio, sm)) {
+        // Each entry in FIFO represents one transition
+        pio_sm_get(pio, sm);
+        count++;
+    }
+    
+    return count;
+}
+
+// Reset the counter by stopping and restarting the state machine
+static inline void signal_counter_reset(PIO pio, uint sm, uint offset) {
+    pio_sm_set_enabled(pio, sm, false);
+    pio_sm_clear_fifos(pio, sm);
+    pio_sm_restart(pio, sm);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+// Special constants for detecting bad readings
+#define MAX_EXPECTED_TRANSITIONS 20000000 // 10MHz (20M transitions) is our target max frequency
+
+// Calculate frequency based on transition count and elapsed time - no limits
+static inline float signal_counter_estimate_frequency(uint32_t raw_transitions, uint32_t time_us) {
+    if (time_us == 0) return 0.0f;
+    
+    // Each full cycle has 2 transitions (rising and falling edges)
+    float cycles = raw_transitions / 2.0f;
+    float seconds = time_us / 1000000.0f;
+    
+    // Calculate frequency directly - no limiting or capping
+    return cycles / seconds;
+}
+%}
