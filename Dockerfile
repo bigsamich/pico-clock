@@ -42,7 +42,7 @@ RUN git clone --depth 1 https://github.com/raspberrypi/picotool.git \
 
 # Set up working directory
 WORKDIR /app
-COPY scripts /app/scripts
+COPY ./scripts /app/scripts
 
 # Create build directory
 RUN mkdir -p /app/build
