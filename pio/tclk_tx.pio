@@ -1,0 +1,96 @@
+;
+; TCLK PIO transmitter program for Raspberry Pi Pico
+; 
+; This PIO program implements the TCLK protocol transmitter using differential Manchester encoding.
+; Based on the TCLK protocol specification:
+; - A transition occurs at each bit cell boundary (every 100ns)
+; - An additional transition occurs at mid-cell (50ns) if the bit is 1
+; - No additional transition occurs if the bit is 0
+;
+; This implementation is based on the Raspberry Pi Pico differential Manchester example.
+;
+
+.program tclk_tx
+.side_set 1 opt
+
+; Transmit one bit every 20 cycles (10 cycles per half bit). In each bit period:
+; - A '0' is encoded as a transition at the start of the bit period only
+; - A '1' is encoded as a transition at the start AND in the middle
+;
+; When idle, the line should be high with transitions at mid-cell (all 1s)
+; Side-set bit 0 must be mapped to the data output pin.
+; Autopull must be enabled.
+
+; Initialize to idle state (high with transitions at mid-cell)
+public idle:
+    nop             side 1 [9]   ; Set line high for 10 cycles
+    nop             side 0 [9]   ; Transition at mid-cell for 10 cycles
+    jmp idle                     ; Loop in idle state until data is available
+
+public start:
+    ; Pull data from FIFO
+    pull                         ; Pull data from FIFO
+    
+    ; Process bits
+bit_loop:
+    out x, 1                     ; Get next bit from OSR
+    jmp !x, send_zero side 1 [3] ; If bit is 0, jump to send_zero
+    
+    ; Send a 1 bit (transition at both bit boundary and mid-cell)
+    nop             side 0 [9]   ; First part of delay (10 cycles)
+    nop             side 1 [9]   ; Transition at mid-cell (10 cycles)
+    jmp bit_check                ; Check if we need to pull more data
+    
+send_zero:
+    ; Send a 0 bit (transition at bit boundary only, stable at mid-cell)
+    ; Split the delay into multiple instructions to stay within the limit of 15
+    nop             side 1 [9]   ; First part of delay (10 cycles)
+    nop             side 1 [9]   ; Second part of delay (10 cycles)
+    
+bit_check:
+    ; Check if we need to pull more data
+    jmp !osre, bit_loop          ; If OSR not empty, process next bit
+    
+    ; OSR is empty, go back to idle state
+    jmp idle                     ; Return to idle state
+
+% c-sdk {
+#include <cstdio>
+
+static inline void tclk_tx_program_init(PIO pio, uint sm, uint offset, uint pin, float div) {
+    pio_sm_set_pins_with_mask(pio, sm, 0, 1u << pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
+    pio_gpio_init(pio, pin);
+
+    pio_sm_config c = tclk_tx_program_get_default_config(offset);
+    sm_config_set_sideset_pins(&c, pin);
+    sm_config_set_out_shift(&c, true, true, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    sm_config_set_clkdiv(&c, div);
+    
+    // Initialize at the idle label to start in idle state (all 1s)
+    pio_sm_init(pio, sm, offset + tclk_tx_offset_idle, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+// Function to send a single bit
+static inline void tclk_tx_send_bit(PIO pio, uint sm, bool bit) {
+    // Wait for space in the FIFO
+    while (pio_sm_is_tx_fifo_full(pio, sm))
+        tight_loop_contents();
+    
+    // Jump to start label to begin transmission
+    pio_sm_exec(pio, sm, pio_encode_jmp(pio_sm_get_pc(pio, sm) - 
+                                        (pio_sm_get_pc(pio, sm) - tclk_tx_offset_start)));
+    
+    // Send the bit
+    pio_sm_put(pio, sm, bit ? 1 : 0);
+}
+
+// Function to send a byte (LSB first)
+static inline void tclk_tx_send_byte(PIO pio, uint sm, uint8_t byte) {
+    for (int i = 0; i < 8; i++) {
+        tclk_tx_send_bit(pio, sm, (byte >> i) & 1);
+    }
+}
+%}

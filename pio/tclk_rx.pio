@@ -1,0 +1,241 @@
+;
+; TCLK PIO receiver program for Raspberry Pi Pico
+; 
+; This PIO program implements the TCLK protocol receiver using differential Manchester decoding.
+; Based on the TCLK protocol specification:
+; - A transition occurs at each bit cell boundary (every 100ns)
+; - An additional transition occurs at mid-cell (50ns) if the bit is 1
+; - No additional transition occurs if the bit is 0
+;
+; This implementation is based on the Raspberry Pi Pico differential Manchester example.
+; Improved synchronization by detecting a 0 bit (transition at boundary, no mid-cell transition).
+; Each bit is pushed to the FIFO individually for maximum flexibility.
+;
+
+.program tclk_rx
+
+; Manchester decoder for TCLK protocol
+; Improved version with bit synchronization using 0-bit detection
+
+public start:
+    ; Initialize registers
+    set x, 0            ; X = current pin state (tracks level)
+    set y, 0            ; Y = bit accumulator
+    mov osr, null       ; Clear the OSR
+    
+    ; First, detect the current pin state
+    in pins, 1          ; Sample the pin
+    mov x, isr          ; Store initial pin state in X
+    
+    ; Look for a 0 bit for synchronization
+    ; A 0 bit has a transition at the bit boundary but no mid-cell transition
+sync_loop:
+    ; Wait for a transition (either edge)
+    jmp x, wait_for_falling
+    
+wait_for_rising:
+    ; Current state is low, wait for rising edge (transition)
+    wait 1 pin 0        ; Wait for pin to go high
+    set x, 1            ; Update our state tracker
+    
+    ; Now wait for half a bit period to check for mid-cell transition
+    nop [9]             ; Delay 10 cycles (9 NOPs + 1 for the instruction itself)
+    
+    ; Sample the pin at mid-bit
+    in pins, 1          ; Sample the pin
+    mov isr, pins       ; Store pin state in ISR
+    
+    ; If pin is still high at mid-bit (no transition), we found a 0 bit
+    jmp pin, sync_complete  ; If pin is still high, we found a 0 bit
+    
+    ; Otherwise, there was a mid-cell transition (1 bit)
+    ; Continue looking for a 0 bit
+    set x, 0            ; Update our state tracker (pin is now low)
+    jmp wait_for_rising ; Continue looking
+    
+wait_for_falling:
+    ; Current state is high, wait for falling edge (transition)
+    wait 0 pin 0        ; Wait for pin to go low
+    set x, 0            ; Update our state tracker
+    
+    ; Now wait for half a bit period to check for mid-cell transition
+    nop [9]             ; Delay 10 cycles (9 NOPs + 1 for the instruction itself)
+    
+    ; Sample the pin at mid-bit
+    in pins, 1          ; Sample the pin
+    mov isr, pins       ; Store pin state in ISR
+    
+    ; If pin is still low at mid-bit (no transition), we found a 0 bit
+    jmp pin, wait_for_falling  ; If pin is high, there was a mid-cell transition (1 bit)
+    
+    ; Otherwise, there was no mid-cell transition (0 bit)
+    jmp sync_complete   ; We found a 0 bit for synchronization
+    
+sync_complete:
+    ; We've found a 0 bit, now we're synchronized
+    ; The next transition will be a bit boundary
+
+.wrap_target
+bit_loop:
+    ; Wait for a bit boundary transition (either edge)
+    jmp x, wait_for_bit_boundary_falling
+    
+wait_for_bit_boundary_rising:
+    ; Current state is low, wait for rising edge (bit boundary)
+    wait 1 pin 0        ; Wait for pin to go high
+    set x, 1            ; Update our state tracker
+    jmp check_mid_bit   ; Continue to mid-bit check
+    
+wait_for_bit_boundary_falling:
+    ; Current state is high, wait for falling edge (bit boundary)
+    wait 0 pin 0        ; Wait for pin to go low
+    set x, 0            ; Update our state tracker
+    
+check_mid_bit:
+    ; Wait about half a bit period to check for mid-cell transition
+    nop [9]             ; Delay 10 cycles (9 NOPs + 1 for the instruction itself)
+    
+    ; Sample the pin state at mid-bit
+    in pins, 1          ; Sample the pin
+    
+    ; Check if there was a mid-cell transition
+    ; If pin state != X, there was a transition (1 bit)
+    ; If pin state == X, there was no transition (0 bit)
+    jmp x, check_high   ; Jump based on our tracked state
+    
+check_low:
+    ; X is 0, so if pin is 0, no transition (0 bit)
+    ; If pin is 1, there was a transition (1 bit)
+    jmp pin, got_one    ; If pin is high, it's a 1 bit
+    jmp got_zero        ; Otherwise, it's a 0 bit
+    
+check_high:
+    ; X is 1, so if pin is 1, no transition (0 bit)
+    ; If pin is 0, there was a transition (1 bit)
+    jmp pin, got_zero   ; If pin is high, it's a 0 bit
+    
+got_one:
+    ; It's a 1 bit
+    mov isr, null       ; Clear ISR
+    set y, 1            ; Set Y to 1 (our bit value)
+    in y, 1             ; Shift the bit into ISR
+    push                ; Push the bit to FIFO immediately
+    ; Update X to reflect current pin state
+    mov x, pins         ; Update X with current pin state
+    jmp bit_loop        ; Continue to next bit
+    
+got_zero:
+    ; It's a 0 bit
+    mov isr, null       ; Clear ISR
+    set y, 0            ; Set Y to 0 (our bit value)
+    in y, 1             ; Shift the bit into ISR
+    push                ; Push the bit to FIFO immediately
+    ; X already reflects current pin state
+    jmp bit_loop        ; Continue to next bit
+.wrap
+
+% c-sdk {
+#include <cstdio>
+
+static inline void tclk_rx_program_init(PIO pio, uint sm, uint offset, uint pin, float div) {
+    printf("DEBUG: Start of tclk_rx_program_init\n");
+    
+    // First drain the RX FIFO if there's anything in it
+    while (!pio_sm_is_rx_fifo_empty(pio, sm)) {
+        uint32_t discard = pio_sm_get(pio, sm);
+        printf("DEBUG: Discarding value from RX FIFO: 0x%08X\n", discard);
+    }
+    
+    // Configure pin explicitly for input with pull-up
+    gpio_init(pin);
+    gpio_set_dir(pin, GPIO_IN);
+    gpio_pull_up(pin);
+    
+    // Configure PIO state machine
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, false);
+    pio_gpio_init(pio, pin);
+
+    // Disable the state machine while configuring
+    pio_sm_set_enabled(pio, sm, false);
+    
+    pio_sm_config c = tclk_rx_program_get_default_config(offset);
+    
+    // Set up input pin
+    sm_config_set_in_pins(&c, pin);     // for WAIT and pin reading
+    sm_config_set_jmp_pin(&c, pin);     // for JMP
+    
+    // Configure shift register for individual bit collection
+    // We're manually pushing each bit, so no autopush
+    sm_config_set_in_shift(&c, false, false, 32);
+    
+    // Join RX FIFO to make it deeper
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+    
+    // Slow down the state machine for reliable decoding
+    // For Manchester decoding, we need to sample at a rate higher than the bit rate
+    // A divider of 5-10 is usually good depending on the signal quality
+    sm_config_set_clkdiv(&c, div * 1.2f); // Slightly faster than original for better timing
+    
+    // Clear FIFOs before starting
+    pio_sm_clear_fifos(pio, sm);
+    
+    // Initialize state machine with our config
+    pio_sm_init(pio, sm, offset, &c);
+
+    // Send state machine to start of program
+    pio_sm_exec(pio, sm, pio_encode_jmp(offset + tclk_rx_offset_start));
+    
+    // Enable the state machine to start running
+    pio_sm_set_enabled(pio, sm, true);
+    
+    printf("DEBUG: RX program initialized and running at pin %d, SM %d\n", pin, sm);
+    printf("DEBUG: RX FIFO joined, clock divider set to %f\n", div * 1.2f);
+}
+
+// Function to read a bit directly from the PIO FIFO
+static inline bool tclk_rx_get_bit(PIO pio, uint sm, bool* bit) {
+    static int call_count = 0;
+    call_count++;
+    
+    // Check if there's data available
+    if (pio_sm_is_rx_fifo_empty(pio, sm)) {
+        if (call_count % 1000 == 0) {
+            printf("DEBUG: Waiting for data in RX FIFO (empty check #%d)\n", call_count);
+        }
+        return false;
+    }
+    
+    // Read the value from FIFO - each FIFO entry is now a single bit
+    uint32_t value = pio_sm_get(pio, sm);
+    
+    // Debug every few successful reads to avoid console spam
+    if (call_count % 50 == 0) {
+        printf("DEBUG: Read bit from RX FIFO: %d (check #%d)\n", value & 0x01, call_count);
+    }
+    
+    // Extract bit (LSB of the value)
+    *bit = (value & 0x01) != 0;
+    
+    return true;
+}
+
+// Function to read a variable number of bits (up to 12) into a uint16_t
+static inline bool tclk_rx_get_bits(PIO pio, uint sm, uint16_t* value, uint8_t num_bits) {
+    if (num_bits > 12) {
+        printf("ERROR: Cannot read more than 12 bits at once (requested %d)\n", num_bits);
+        return false;
+    }
+    
+    *value = 0;
+    for (int i = 0; i < num_bits; i++) {
+        bool bit;
+        if (!tclk_rx_get_bit(pio, sm, &bit)) {
+            return false;
+        }
+        if (bit) {
+            *value |= (1 << i);
+        }
+    }
+    return true;
+}
+%}
