@@ -7,14 +7,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include "pico/stdlib.h"
+#include "pico/cyw43_arch.h"
 #include "pico/multicore.h"
 #include "hardware/pio.h"
 #include "hardware/gpio.h"
 #include "tclk.h"
 
 // Configuration
-#define TCLK_INPUT_PIN 16    // GPIO pin for TCLK input
-#define TCLK_OUTPUT_PIN 17   // GPIO pin for TCLK output
+#define TCLK_INPUT_PIN 12    // GPIO pin for TCLK input
+#define TCLK_OUTPUT_PIN 13   // GPIO pin for TCLK output
 #define BUFFER_SIZE 256      // Size of the buffer for data bytes
 #define JSON_BUFFER_SIZE 128 // Size of the JSON buffer
 
@@ -31,20 +32,24 @@ static volatile bool running = true;
 
 int main() {
     // Initialize stdio
-    // Initialize stdio
     stdio_init_all();
-    gpio_init(PICO_DEFAULT_LED_PIN);
-    gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+
+    if (cyw43_arch_init()) {
+        printf("Wi-Fi init failed");
+        return -1;
+    }
+  
     // 5 second loop with a starting message every second
     for (int i = 1; i <= 5; ++i) {
         printf("Starting in %d...\n", 6 - i);
         //Flash the LED to indicate startup for 1 second off and on at 20Hz
         for (int j = 0; j < 20; ++j) {
-            gpio_put(PICO_DEFAULT_LED_PIN, true);
-            sleep_ms(25); // On for 25ms
-            gpio_put(PICO_DEFAULT_LED_PIN, false);
-            sleep_ms(25); // Off for 25ms
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+            sleep_ms(25);
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+            sleep_ms(25);
         }
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
     }
     
     printf("Raspberry Pi Pico Clock Protocol Implementation\n");
@@ -99,22 +104,84 @@ int main() {
 void core1_entry() {
     printf("Data processing started on core 1\n");
     
-    uint8_t rx_ffer[BUFFER_SIZE]; // Buffer for received bytes
+    uint8_t rx_buffer[BUFFER_SIZE]; // Buffer for received bytes
+    int loop_count = 0;
+    int empty_count = 0;
     
     while (running) {
+        // Periodically toggle the LED to show core1 is running
+        if (loop_count % 500 == 0) {
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+            sleep_ms(5);
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+        }
+        
+        // Debug: Check raw PIO FIFO status
+        if (loop_count % 100 == 0) {
+            bool fifo_empty = pio_sm_is_rx_fifo_empty(tclk.pio, tclk.sm_rx);
+            int fifo_level = pio_sm_get_rx_fifo_level(tclk.pio, tclk.sm_rx);
+            printf("DEBUG: PIO RX FIFO status - %s, level: %d\n",
+                   fifo_empty ? "EMPTY" : "NOT EMPTY", fifo_level);
+            
+            if (!fifo_empty) {
+                // If there's data in the FIFO, read it directly
+                uint32_t fifo_data = pio_sm_get(tclk.pio, tclk.sm_rx);
+                printf("DEBUG: Direct FIFO read: 0x%08X\n", fifo_data);
+                
+                // Flash LED to indicate data received
+                cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+                sleep_ms(50);
+                cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+            }
+        }
+        
         // Read received bytes with timestamp from TCLK
         uint64_t tclk_timestamp = 0;
         size_t tclk_byte_count = tclk_receive_bytes(&tclk, rx_buffer, BUFFER_SIZE, &tclk_timestamp);
         
         if (tclk_byte_count > 0) {
+            // Reset empty count
+            empty_count = 0;
+            
             // Process the received TCLK data with timestamp
             process_received_tclk_data(rx_buffer, tclk_byte_count, tclk_timestamp);
-        }
-        
-        // If no data available, sleep a bit
-        if (tclk_byte_count == 0) {
+            
+            // If we got data, keep the LED on briefly to indicate activity
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+            sleep_ms(20);
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+        } else {
+            // Count consecutive empty reads
+            empty_count++;
+            
+            // Every 500 empty reads, print debug info
+            if (empty_count % 500 == 0) {
+                printf("DEBUG: No data for %d cycles\n", empty_count);
+            }
+            
+            // If we've had a long period without data, try reconnecting
+            if (empty_count > 5000) {
+                printf("Warning: No data received for an extended period (%d cycles)\n", empty_count);
+                
+                // Flash LED to indicate reconnection attempt
+                for (int i = 0; i < 3; i++) {
+                    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+                    sleep_ms(50);
+                    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+                    sleep_ms(50);
+                }
+                
+                // Try to re-synchronize
+                printf("Attempting to re-synchronize...\n");
+                tclk_synchronize(&tclk);
+                empty_count = 0;
+            }
+            
+            // If no data available, sleep a bit
             sleep_ms(10);
         }
+        
+        loop_count++;
     }
     
     printf("Data processing stopped on core 1\n");

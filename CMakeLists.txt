@@ -16,8 +16,9 @@ pico_sdk_init()
 
 # Add PIO files
 set(PIO_FILES
-    # TCLK PIO file
-    ${CMAKE_CURRENT_LIST_DIR}/pio/tclk.pio
+    # TCLK PIO files (separated into TX and RX)
+    ${CMAKE_CURRENT_LIST_DIR}/pio/tclk_tx.pio
+    ${CMAKE_CURRENT_LIST_DIR}/pio/tclk_rx.pio
     # Signal detector PIO file
     ${CMAKE_CURRENT_LIST_DIR}/pio/signal_detector.pio
 )
@@ -31,8 +32,9 @@ add_executable(${PROJECT_NAME}
     src/tclk.cpp
 )
 
-# Generate PIO header for TCLK
-pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/tclk.pio)
+# Generate PIO headers for TCLK (TX and RX)
+pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/tclk_tx.pio)
+pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio/tclk_rx.pio)
 
 # Link libraries
 target_link_libraries(${PROJECT_NAME}
